@@ -1,0 +1,465 @@
+import { describe, expect, it } from 'vitest'
+import { DAYS, TARGET } from './data'
+import { prepareDay, solveDay } from './solver'
+import type { SolvedPattern } from './solver'
+
+const prep = (values: readonly number[]) =>
+  prepareDay({
+    key: 'x',
+    name: 'テスト',
+    items: values.map((v, i) => ({ label: `V${i}`, value: v })),
+  })
+
+/** パターンを比較しやすい素朴な形に落とす */
+const shape = (p: SolvedPattern) => ({
+  values: p.parts.map((x) => x.option.value),
+  counts: p.parts.map((x) => x.count),
+  kinds: p.kinds,
+  totalCount: p.totalCount,
+  score: p.score,
+})
+
+// ---------------------------------------------------------------------------
+// 総当たり参照実装（テスト専用の素朴な解法）
+// ソルバーは拡張ユークリッド互除法で最小回数解を「計算」するが、
+// こちらは全パターンを「数え上げ」て最小を出す。両者が一致することで正しさを担保する。
+// ---------------------------------------------------------------------------
+
+/** subset（降順の実数値）を各1回以上使って D ちょうどを作る、合計回数が最小の解 */
+function bruteSubsetMin(D: number, subset: readonly number[]): number[] | null {
+  const total = (a: readonly number[]) => a.reduce((x, y) => x + y, 0)
+  let best: number[] | null = null
+  const keep = (counts: number[]) => {
+    if (!best || total(counts) < total(best)) best = counts
+  }
+
+  if (subset.length === 1) {
+    const [a] = subset
+    if (D % a === 0 && D / a >= 1) keep([D / a])
+  } else if (subset.length === 2) {
+    const [a, b] = subset
+    for (let c1 = 1; c1 * a < D; c1++) {
+      const rest = D - c1 * a
+      if (rest % b === 0 && rest / b >= 1) keep([c1, rest / b])
+    }
+  } else {
+    const [a, b, c] = subset
+    for (let c1 = 1; c1 * a < D; c1++) {
+      for (let c2 = 1; c1 * a + c2 * b < D; c2++) {
+        const rest = D - c1 * a - c2 * b
+        if (rest > 0 && rest % c === 0) keep([c1, c2, rest / c])
+      }
+    }
+  }
+  return best
+}
+
+/** ソルバーと同じ順序（1種類→2種類→3種類、値は降順）で全部分集合を列挙する */
+function allSubsets(values: readonly number[]): number[][] {
+  const sorted = [...values].sort((a, b) => b - a)
+  const out: number[][] = []
+  for (let i = 0; i < sorted.length; i++) out.push([sorted[i]])
+  for (let i = 0; i < sorted.length; i++)
+    for (let j = i + 1; j < sorted.length; j++) out.push([sorted[i], sorted[j]])
+  for (let i = 0; i < sorted.length; i++)
+    for (let j = i + 1; j < sorted.length; j++)
+      for (let k = j + 1; k < sorted.length; k++) out.push([sorted[i], sorted[j], sorted[k]])
+  return out
+}
+
+const scoreOf = (values: readonly number[], priority: readonly number[]): number =>
+  values.reduce((s, v) => {
+    const r = priority.indexOf(v)
+    return s + (r < 0 ? 0 : 3 - r)
+  }, 0)
+
+/** D を作る全パターンを、ソルバーと同じ規則で並べた期待値 */
+interface BruteEntry {
+  values: number[]
+  counts: number[]
+  kinds: number
+  totalCount: number
+  score: number
+}
+
+function bruteExpected(
+  D: number,
+  values: readonly number[],
+  priority: readonly number[] = [],
+  limit = 20,
+): BruteEntry[] {
+  const found: BruteEntry[] = []
+  for (const subset of allSubsets(values)) {
+    const counts = bruteSubsetMin(D, subset)
+    if (!counts) continue
+    found.push({
+      values: subset,
+      counts,
+      kinds: subset.length,
+      totalCount: counts.reduce((a, b) => a + b, 0),
+      score: scoreOf(subset, priority),
+    })
+  }
+  // Array.prototype.sort は安定ソートなので、同点は列挙順のまま＝ソルバーと同じ
+  found.sort((a, b) => b.score - a.score || a.kinds - b.kinds || a.totalCount - b.totalCount)
+  return found.slice(0, limit)
+}
+
+/** 3種類以内で D ちょうどを作れるか */
+const bruteReachable = (D: number, values: readonly number[]): boolean =>
+  allSubsets(values).some((subset) => bruteSubsetMin(D, subset) !== null)
+
+/** D 以上で到達可能な最小の値 */
+function bruteMinAtLeast(D: number, values: readonly number[], span = 3000): number | null {
+  for (let s = D; s <= D + span; s++) if (bruteReachable(s, values)) return s
+  return null
+}
+
+// ---------------------------------------------------------------------------
+
+describe('prepareDay', () => {
+  it('同じ値の行動を1つの選択肢にまとめ、ラベルを併記する', () => {
+    const p = prepareDay({
+      key: 'thu',
+      name: '木',
+      items: [
+        { label: '覚醒かけら', value: 25000 },
+        { label: '専用武装のかけら', value: 25000 },
+        { label: 'UR英雄かけら', value: 25000 },
+        { label: '英雄募集', value: 4200 },
+      ],
+    })
+    expect(p.options).toHaveLength(2)
+    expect(p.options[0].value).toBe(25000)
+    expect(p.options[0].labels).toEqual(['覚醒かけら', '専用武装のかけら', 'UR英雄かけら'])
+  })
+
+  it('値を降順に並べる', () => {
+    expect(prep([100, 900, 300]).options.map((o) => o.value)).toEqual([900, 300, 100])
+  })
+
+  it('小数を含む値は倍率をかけて整数化し、GCD で縮小する', () => {
+    const p = prep([2812.5, 25000, 3750])
+    expect(p.scaleFactor).toBe(10)
+    // 実質の刻み = unitScale / scaleFactor
+    expect(p.unitScale / p.scaleFactor).toBe(312.5)
+    expect(p.options.map((o) => o.unit * (p.unitScale / p.scaleFactor))).toEqual([
+      25000, 3750, 2812.5,
+    ])
+  })
+
+  it('0・負数・NaN の行は選択肢から除外する', () => {
+    const p = prepareDay({
+      key: 'x',
+      name: 'x',
+      items: [
+        { label: 'ok', value: 100 },
+        { label: 'zero', value: 0 },
+        { label: 'minus', value: -50 },
+        { label: 'nan', value: NaN },
+      ],
+    })
+    expect(p.options.map((o) => o.value)).toEqual([100])
+  })
+
+  it('選択肢が0件でも壊れない', () => {
+    const p = prepareDay({ key: 'x', name: 'x', items: [] })
+    expect(p.options).toEqual([])
+    expect(solveDay(p, 0, TARGET).status).toBe('empty')
+  })
+})
+
+describe('solveDay: 総当たり参照実装との一致', () => {
+  const cases = [
+    { values: [7, 11, 13], targets: [100, 137, 500, 1001] },
+    { values: [50, 84, 175, 500], targets: [1000, 1234, 5000, 20000] },
+    { values: [3, 55, 165, 500], targets: [600, 997, 3000] },
+    { values: [150, 4500], targets: [4650, 9000, 13500] },
+    { values: [56, 84, 112, 140, 168, 150], targets: [560, 1000, 2000] },
+  ]
+
+  for (const { values, targets } of cases) {
+    for (const D of targets) {
+      it(`values=[${values}] D=${D} で上位20件が一致する`, () => {
+        const r = solveDay(prep(values), 0, D)
+        const expected = bruteExpected(D, values)
+
+        expect(r.status).toBe(expected.length > 0 ? 'exact' : 'over-shoot')
+        if (expected.length === 0) return
+
+        // 使うアイテムの組み合わせと、その最小合計回数が総当たりと一致する
+        expect(r.patterns.map((p) => shape(p).values)).toEqual(expected.map((e) => e.values))
+        expect(r.patterns.map((p) => p.totalCount)).toEqual(expected.map((e) => e.totalCount))
+        // 回数の内訳は同点解が複数ありうるので、「合計がちょうど D になる」ことを確認する
+        for (const p of r.patterns) {
+          expect(p.parts.reduce((s, x) => s + x.option.value * x.count, 0)).toBe(D)
+        }
+      })
+    }
+  }
+
+  it('優先指定つきでも上位20件が一致する', () => {
+    const values = [50, 84, 175, 500]
+    for (const priority of [[500], [50, 500], [175, 50, 500], [84]]) {
+      for (const D of [1234, 5000, 20000]) {
+        const r = solveDay(prep(values), 0, D, priority)
+        const expected = bruteExpected(D, values, priority)
+        expect(r.patterns.map((p) => shape(p).values), `D=${D} priority=[${priority}]`).toEqual(
+          expected.map((e) => e.values),
+        )
+        expect(r.patterns.map((p) => p.score)).toEqual(expected.map((e) => e.score))
+      }
+    }
+  })
+
+  // 優先指定が無いときは20件揃った時点で3種類の探索を打ち切る最適化が入っている。
+  // 優先指定があるとその打ち切りは上位20件の顔ぶれを変えてしまうため、
+  // 「打ち切りが効くだけ選択肢が多い」ケースで全組み合わせを見ていることを確かめる。
+  it('打ち切りが効くケースでも、優先指定時は3種類の組み合わせまで探す', () => {
+    const values = [7, 11, 13, 17, 19, 23, 29, 31]
+    for (const D of [200, 301, 500]) {
+      // 前提: 優先指定なしだと2種類までで20件埋まる（＝3種類は探索されない）
+      const plain = solveDay(prep(values), 0, D)
+      expect(plain.patterns).toHaveLength(20)
+      expect(plain.patterns.every((p) => p.kinds <= 2), `D=${D}`).toBe(true)
+
+      for (const priority of [
+        [7, 11, 13],
+        [31, 7],
+        [29, 31, 23],
+      ]) {
+        const r = solveDay(prep(values), 0, D, priority)
+        const expected = bruteExpected(D, values, priority)
+        const label = `D=${D} priority=[${priority}]`
+        expect(r.patterns.map((p) => shape(p).values), label).toEqual(expected.map((e) => e.values))
+        expect(r.patterns.map((p) => p.score), label).toEqual(expected.map((e) => e.score))
+      }
+    }
+  })
+
+  it('ぴったり作れないときの超過値が本当に最小である', () => {
+    const cases = [
+      { values: [7, 11, 13], D: 5 },
+      { values: [50, 84, 175, 500], D: 33 },
+      { values: [50, 84, 175, 500], D: 1233 },
+      { values: [150, 4500], D: 4649 },
+      { values: [1000], D: 1 },
+      { values: [900, 1000], D: 1234 },
+      { values: [2500, 3750, 8750, 25000], D: 312.5 * 4 },
+    ]
+    // 到達可能かどうかも総当たりで判定するので、ケースの想定違いで誤検知しない
+    let overshootCases = 0
+    for (const { values, D } of cases) {
+      const r = solveDay(prep(values), 0, D)
+      const label = `values=[${values}] D=${D}`
+      if (bruteReachable(D, values)) {
+        expect(r.status, label).toBe('exact')
+        expect(r.patterns[0].reached, label).toBe(D)
+        continue
+      }
+      overshootCases++
+      expect(r.status, label).toBe('over-shoot')
+      expect(r.patterns[0].reached, label).toBe(bruteMinAtLeast(D, values))
+      // 超過パターンは全て同じ到達値
+      expect(new Set(r.patterns.map((p) => p.reached)).size, label).toBe(1)
+    }
+    expect(overshootCases).toBeGreaterThan(0)
+  })
+
+  // 超過フォールバックは「1種類だけで作れる最小値」を上限に1単位ずつ走査している。
+  // その途中にある複数種類の解を取りこぼすと非最小の答えを返すため、
+  // 取りこぼしが起きやすい値の組で不足額を全数走査して最小性を検証する。
+  // 例: [23,14,51] で不足29 → 真の最小超過は 37(=14+23) だが、1種類だけだと 42(=14×3)。
+  it('超過フォールバックの最小性を不足額の全数走査で確認する', () => {
+    const systems = [
+      [23, 14, 51],
+      [42, 49, 31],
+      [20, 32, 19],
+      [11, 30, 54],
+      [18, 34, 46, 57],
+      [7, 11, 13],
+    ]
+    for (const values of systems) {
+      const p = prep(values)
+      for (let D = 1; D <= 120; D++) {
+        const r = solveDay(p, 0, D)
+        const label = `values=[${values}] D=${D}`
+        if (bruteReachable(D, values)) {
+          expect(r.status, label).toBe('exact')
+          expect(r.patterns[0].reached, label).toBe(D)
+        } else {
+          expect(r.status, label).toBe('over-shoot')
+          expect(r.patterns[0].reached, label).toBe(bruteMinAtLeast(D, values))
+        }
+      }
+    }
+  })
+})
+
+describe('solveDay: 並び順の契約', () => {
+  const ordered = (patterns: readonly SolvedPattern[]): boolean =>
+    patterns.every((p, i) => {
+      if (i === 0) return true
+      const q = patterns[i - 1]
+      return (
+        q.score > p.score ||
+        (q.score === p.score &&
+          (q.kinds < p.kinds || (q.kinds === p.kinds && q.totalCount <= p.totalCount)))
+      )
+    })
+
+  it('優先指定なしは 種類数 → 合計回数 の昇順', () => {
+    for (const day of DAYS.map(prepareDay)) {
+      const r = solveDay(day, 6_850_000, TARGET)
+      expect(ordered(r.patterns), day.name).toBe(true)
+      expect(r.patterns.every((p) => p.score === 0)).toBe(true)
+    }
+  })
+
+  it('優先指定ありは 優先スコア降順 → 種類数 → 合計回数', () => {
+    for (const day of DAYS.map(prepareDay)) {
+      const values = day.options.map((o) => o.value)
+      const priority = values.slice(0, 3)
+      const r = solveDay(day, 6_850_000, TARGET, priority)
+      expect(ordered(r.patterns), day.name).toBe(true)
+      // スコアは ①=3, ②=2, ③=1 の合計
+      for (const p of r.patterns) {
+        expect(p.score).toBe(
+          scoreOf(
+            p.parts.map((x) => x.option.value),
+            priority,
+          ),
+        )
+      }
+    }
+  })
+
+  it('優先指定は絞り込みではなく並び替え（件数が変わらない）', () => {
+    for (const day of DAYS.map(prepareDay)) {
+      const values = day.options.map((o) => o.value)
+      const plain = solveDay(day, 6_850_000, TARGET)
+      for (const priority of [[values[0]], values.slice(0, 2), values.slice(-3)]) {
+        const r = solveDay(day, 6_850_000, TARGET, priority)
+        expect(r.patterns.length, `${day.name} / [${priority}]`).toBe(plain.patterns.length)
+      }
+    }
+  })
+
+  it('優先アイテムを含むパターンが必ず先頭に来る', () => {
+    const day = prepareDay(DAYS[0])
+    const target = 2500 // SR英雄かけら1枚消費
+    expect(day.options.some((o) => o.value === target)).toBe(true)
+    const r = solveDay(day, 6_850_000, TARGET, [target])
+    expect(r.patterns[0].parts.some((x) => x.option.value === target)).toBe(true)
+  })
+
+  it('存在しない値を優先指定しても無視される', () => {
+    const day = prepareDay(DAYS[0])
+    const a = solveDay(day, 6_850_000, TARGET, [99999])
+    const b = solveDay(day, 6_850_000, TARGET)
+    expect(a.patterns.map(shape)).toEqual(b.patterns.map(shape))
+  })
+})
+
+describe('solveDay: 実データ（月〜金）の不変条件', () => {
+  const currents = [0, 12_345, 3_000_000, 6_850_000, 7_000_000, 7_199_000, 7_199_850, 7_199_999]
+
+  for (const base of DAYS) {
+    const day = prepareDay(base)
+    it(`${day.name}: どの現在値でも結果が仕様を満たす`, () => {
+      for (const current of currents) {
+        const r = solveDay(day, current, TARGET)
+        expect(r.patterns.length, `${day.name}/${current}`).toBeGreaterThan(0)
+        expect(r.patterns.length).toBeLessThanOrEqual(20)
+
+        for (const p of r.patterns) {
+          const gain = p.parts.reduce((s, x) => s + x.option.value * x.count, 0)
+          // 主張している獲得値・到達値が実際の合計と一致する
+          expect(p.gain).toBeCloseTo(gain, 6)
+          expect(p.reached).toBeCloseTo(current + gain, 6)
+          // 目標を下回らない
+          expect(p.reached).toBeGreaterThanOrEqual(TARGET)
+          if (r.status === 'exact') expect(p.reached).toBe(TARGET)
+          // 各アイテムは1回以上、回数は整数、同じアイテムの重複なし
+          expect(p.parts.every((x) => Number.isInteger(x.count) && x.count >= 1)).toBe(true)
+          expect(new Set(p.parts.map((x) => x.option.value)).size).toBe(p.parts.length)
+          expect(p.kinds).toBe(p.parts.length)
+          expect(p.totalCount).toBe(p.parts.reduce((s, x) => s + x.count, 0))
+        }
+      }
+    })
+  }
+
+  it('月曜 6,850,000 の最良手は UR英雄かけら×14', () => {
+    const r = solveDay(prepareDay(DAYS[0]), 6_850_000, TARGET)
+    expect(r.status).toBe('exact')
+    expect(shape(r.patterns[0])).toMatchObject({ values: [25000], counts: [14], kinds: 1 })
+  })
+
+  it('火曜 7,199,850 は 建造1分短縮×1 でぴったり', () => {
+    const r = solveDay(prepareDay(DAYS[1]), 7_199_850, TARGET)
+    expect(r.status).toBe('exact')
+    expect(shape(r.patterns[0])).toMatchObject({ values: [150], counts: [1] })
+  })
+
+  it('月曜 7,199,999 はぴったり作れず、最小超過は SR英雄かけら×1', () => {
+    const r = solveDay(prepareDay(DAYS[0]), 7_199_999, TARGET)
+    expect(r.status).toBe('over-shoot')
+    expect(r.patterns[0].reached).toBe(7_199_999 + 2500)
+  })
+})
+
+describe('solveDay: 境界と異常系', () => {
+  const day = prepareDay(DAYS[0])
+
+  it('現在値が目標ちょうどなら reached', () => {
+    expect(solveDay(day, TARGET, TARGET)).toMatchObject({ status: 'reached', patterns: [] })
+  })
+
+  it('現在値が目標を超えていたら over', () => {
+    const r = solveDay(day, TARGET + 1, TARGET)
+    expect(r.status).toBe('over')
+    expect(r.diff).toBe(-1)
+  })
+
+  it('選択肢が1件でも解ける', () => {
+    const r = solveDay(prep([1000]), 0, 7000)
+    expect(shape(r.patterns[0])).toMatchObject({ values: [1000], counts: [7] })
+  })
+
+  it('目標より大きい値しかなくても最小超過を返す', () => {
+    const r = solveDay(prep([8_000_000]), 0, TARGET)
+    expect(r.status).toBe('over-shoot')
+    expect(r.patterns[0].reached).toBe(8_000_000)
+  })
+
+  it('刻みが極端に粗くても必ず解が返る（走査上限で打ち切らない）', () => {
+    const r = solveDay(prep([1234.5678, 99.25]), 7_199_999, TARGET)
+    expect(r.status).toBe('over-shoot')
+    expect(r.patterns.length).toBeGreaterThan(0)
+    expect(r.patterns[0].reached).toBeGreaterThan(TARGET)
+  })
+
+  it('現在値・獲得値に小数が入ってもぴったり一致を見つけられる', () => {
+    // 不足 2812.5 ＝ チップ宝箱(R)開封 ×1 ちょうど
+    const r = solveDay(day, TARGET - 2812.5, TARGET)
+    expect(r.status).toBe('exact')
+    expect(shape(r.patterns[0])).toMatchObject({ values: [2812.5], counts: [1] })
+    expect(r.patterns[0].reached).toBe(TARGET)
+  })
+
+  it('刻み（GCD）と一致するだけでは作れない不足額は超過側に回る', () => {
+    // 月曜の刻みは 312.5 だが、最小の獲得値は 2500 なので 312.5 ちょうどは作れない
+    const r = solveDay(day, TARGET - 312.5, TARGET)
+    expect(r.status).toBe('over-shoot')
+    expect(r.patterns[0].reached).toBe(TARGET - 312.5 + 2500)
+  })
+
+  it('選択肢が多い曜日でも実用的な速度で返る', () => {
+    const fri = prepareDay(DAYS[4])
+    const priority = fri.options.slice(0, 3).map((o) => o.value)
+    const t0 = performance.now()
+    solveDay(fri, 6_850_000, TARGET, priority)
+    expect(performance.now() - t0).toBeLessThan(1000)
+  })
+})
