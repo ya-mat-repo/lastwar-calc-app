@@ -154,6 +154,9 @@ export function prepareDay(day: DaySource): PreparedDay {
 
   const scaled = [...byValue.entries()]
     .map(([value, labels]) => ({ value, labels, scaled: Math.round(value * scaleFactor) }))
+    // MAX_DECIMALS の丸めで 0 になる極小値（0.00001 など）は探索単位が 0 になり、
+    // GCD も割り算も破綻するので選択肢にしない
+    .filter((o) => o.scaled > 0)
     .sort((a, b) => b.value - a.value)
 
   if (scaled.length === 0) {
@@ -334,12 +337,19 @@ export function solveDay(
   if (diff < 0) return { status: 'over', diff, patterns: [] }
 
   const { unitScale, scaleFactor, options } = prep
-  const scaledDiff = Math.round(diff * scaleFactor)
   const budget: Budget = { left: K3_ITERATION_BUDGET }
   const weights = priorityWeights(priority)
 
-  // 目標ぴったり
-  if (scaledDiff % unitScale === 0) {
+  // 不足額を整数化する。丸め誤差の範囲なら整数とみなすが、
+  // 現在値に端数があって本当に小数が残る場合は「整数化できない」＝ぴったりは作れない。
+  // ここで Math.round に丸めてしまうと、目標を下回るパターンを exact として返してしまう
+  // （例: 木曜 / 現在値 7,197,499.75 → 不足 2500.25 を 2500 と誤認して 2500×1 を提示）。
+  const rawScaled = diff * scaleFactor
+  const scaledDiff = Math.round(rawScaled)
+  const isIntegral = Math.abs(rawScaled - scaledDiff) <= Math.max(1e-6, Math.abs(rawScaled) * 1e-12)
+
+  // 目標ぴったり（scaledDiff が 0 のときは「各回数 1 以上」を満たす解が無いので探さない）
+  if (isIntegral && scaledDiff > 0 && scaledDiff % unitScale === 0) {
     const patterns = collectPatterns(scaledDiff / unitScale, prep, MAX_RESULTS, budget, weights)
     if (patterns.length > 0) {
       return { status: 'exact', diff, patterns: decorate(patterns, current) }
@@ -349,7 +359,11 @@ export function solveDay(
   // ぴったり作れない場合は「目標値を超える中で最も近い値」を 1 単位ずつ上げながら探す。
   // 1 種類だけで作れる最小の超過値は必ず到達可能なので、それを探索の上限にする
   // （＝ここまで見れば必ず解が見つかる。値の編集で刻みが極端に粗くなっても破綻しない）。
-  const start = Math.ceil(scaledDiff / unitScale)
+  // 端数が残るときは切り上げてから走査する。切り捨てると目標を下回る解を拾ってしまう。
+  // また現在値の端数で不足額が 1 単位未満になっても「1 単位以上の超過」から探す
+  // （0 のままだと走査が 1 度も回らず none になってしまう）。
+  const startScaled = isIntegral ? scaledDiff : Math.ceil(rawScaled)
+  const start = Math.max(1, Math.ceil(startScaled / unitScale))
   const guaranteed = Math.min(...options.map((o) => Math.ceil(start / o.unit) * o.unit))
   const limit = Math.min(start + MAX_OVERSHOOT_STEPS, guaranteed)
 

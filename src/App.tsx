@@ -6,6 +6,7 @@ import type { SolveResult } from './solver'
 import {
   MAX_PRIORITY,
   RANK_MARK,
+  applyPriorityTap,
   findDay,
   fmt,
   isModified,
@@ -15,7 +16,6 @@ import {
   prunePriority,
   resetDayItems,
   toEditable,
-  togglePriorityValue,
   toPrepared,
 } from './state'
 import type { EditableDay, EditableItem, PriorityMap } from './state'
@@ -80,7 +80,8 @@ export default function App() {
   const togglePriority = (value: number): void =>
     setPriorities((prev) => ({
       ...prev,
-      [dayKey]: togglePriorityValue(prev[dayKey] ?? [], value),
+      // 実在しなくなった値を先に落としてから適用する（落とした結果もそのまま保存する）
+      [dayKey]: applyPriorityTap(prev[dayKey] ?? [], value, prep.options),
     }))
 
   const clearPriority = (): void => setPriorities((prev) => ({ ...prev, [dayKey]: [] }))

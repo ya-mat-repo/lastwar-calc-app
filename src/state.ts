@@ -103,3 +103,17 @@ export function prunePriority(
 ): number[] {
   return priority.filter((v) => options.some((o) => o.value === v))
 }
+
+/**
+ * チップのタップを保存済みの優先指定に適用する。
+ * 保存側に実在しない値が残っていると MAX_PRIORITY の判定が狂い
+ * （画面は2件表示なのに追加できない）、剪定した結果も保存されないため、
+ * 必ず prune してから toggle する。
+ */
+export function applyPriorityTap(
+  stored: readonly number[],
+  value: number,
+  options: readonly Pick<Option, 'value'>[],
+): number[] {
+  return togglePriorityValue(prunePriority(stored, options), value)
+}

@@ -3,6 +3,7 @@ import { DAYS } from './data'
 import type { EditableDay, EditableItem } from './state'
 import {
   MAX_PRIORITY,
+  applyPriorityTap,
   isModified,
   labelOf,
   parseNumber,
@@ -153,6 +154,41 @@ describe('prunePriority', () => {
 
   it('選択肢が空なら全て落ちる', () => {
     expect(prunePriority([100], [])).toEqual([])
+  })
+})
+
+describe('applyPriorityTap', () => {
+  const options = [{ value: 100 }, { value: 200 }, { value: 300 }, { value: 400 }]
+
+  it('通常のタップは togglePriorityValue と同じ', () => {
+    expect(applyPriorityTap([100], 200, options)).toEqual([100, 200])
+    expect(applyPriorityTap([100, 200], 100, options)).toEqual([200])
+  })
+
+  // 保存済みの配列を剪定せずに上限を数えると、画面が2件表示なのに
+  // 3件目を追加できない（タップしても無反応）状態になる
+  it('消えた値が残っていても、実在する分だけで上限を判定する', () => {
+    const stored = [100, 999, 200] // 999 は値を編集・削除されて実在しない
+    expect(applyPriorityTap(stored, 300, options)).toEqual([100, 200, 300])
+  })
+
+  it('剪定した結果がそのまま保存される（消えた値が復活しない）', () => {
+    expect(applyPriorityTap([100, 999, 200], 400, options)).not.toContain(999)
+  })
+
+  it('実在する値が3件あれば、やはり4件目は追加できない', () => {
+    const stored = [100, 200, 300, 999]
+    expect(applyPriorityTap(stored, 400, options)).toEqual([100, 200, 300])
+  })
+
+  it('全ての選択肢が消えていれば、タップした値だけが残る', () => {
+    expect(applyPriorityTap([100, 200, 300], 400, [{ value: 400 }])).toEqual([400])
+  })
+
+  it('元の配列を破壊しない', () => {
+    const stored = [100, 999]
+    applyPriorityTap(stored, 200, options)
+    expect(stored).toEqual([100, 999])
   })
 })
 

@@ -148,6 +148,14 @@ describe('prepareDay', () => {
     ])
   })
 
+  it('小数の丸めで 0 になる極小値は選択肢から除外する', () => {
+    // 0.00001 は MAX_DECIMALS(4桁) の丸めで scaled が 0 になる。
+    // 残してしまうと unit が 0 になり、超過探索の上限が NaN になって解が返らなくなる。
+    const p = prep([150, 0.00001])
+    expect(p.options.map((o) => o.value)).toEqual([150])
+    expect(p.options.every((o) => o.unit > 0)).toBe(true)
+  })
+
   it('0・負数・NaN の行は選択肢から除外する', () => {
     const p = prepareDay({
       key: 'x',
@@ -406,6 +414,181 @@ describe('solveDay: 実データ（月〜金）の不変条件', () => {
     const r = solveDay(prepareDay(DAYS[0]), 7_199_999, TARGET)
     expect(r.status).toBe('over-shoot')
     expect(r.patterns[0].reached).toBe(7_199_999 + 2500)
+  })
+})
+
+// §6-12「選択肢が1件以上あれば、必ず1件以上のパターンが返る」は
+// 実データ×整数の現在値でしか確認していなかったため、
+// 端数のある現在値・編集された値の集合まで広げて検証する。
+describe('solveDay: 不変条件 §6-12（選択肢があれば必ず解が返る）', () => {
+  /** §6 の不変条件をまとめて確認する */
+  const expectInvariants = (
+    r: ReturnType<typeof solveDay>,
+    current: number,
+    target: number,
+    label: string,
+  ): void => {
+    expect(r.status, label).not.toBe('none')
+    expect(r.patterns.length, label).toBeGreaterThan(0)
+    expect(r.patterns.length, label).toBeLessThanOrEqual(20)
+    for (const p of r.patterns) {
+      const gain = p.parts.reduce((s, x) => s + x.option.value * x.count, 0)
+      expect(p.gain, label).toBeCloseTo(gain, 6) // §6-1
+      expect(p.reached, label).toBeCloseTo(current + gain, 6) // §6-2
+      expect(p.reached, label).toBeGreaterThanOrEqual(target) // §6-3
+      if (r.status === 'exact') expect(p.reached, label).toBe(target) // §6-4
+      expect(p.parts.every((x) => Number.isInteger(x.count) && x.count >= 1), label).toBe(true) // §6-5
+      expect(new Set(p.parts.map((x) => x.option.value)).size, label).toBe(p.parts.length) // §6-6
+      expect(p.kinds, label).toBe(p.parts.length) // §6-7
+      expect(p.totalCount, label).toBe(p.parts.reduce((s, x) => s + x.count, 0))
+    }
+    // §6-9: over-shoot なら全パターンが同じ到達値
+    if (r.status === 'over-shoot') {
+      expect(new Set(r.patterns.map((p) => p.reached)).size, label).toBe(1)
+    }
+  }
+
+  // 火〜金は全値が整数なので scaleFactor が 1。現在値に端数があると
+  // 不足額が 1 単位未満になり、以前は scaledDiff が 0 に丸まって none を返していた。
+  it('現在値に端数があっても解が返る（不足額が1単位未満のケース）', () => {
+    for (const base of DAYS) {
+      const day = prepareDay(base)
+      const minValue = Math.min(...day.options.map((o) => o.value))
+      for (const current of [
+        TARGET - 0.4,
+        TARGET - 0.01,
+        TARGET - 0.0001,
+        TARGET - 1.5,
+        TARGET - 2500.25,
+      ]) {
+        const label = `${day.name} / current=${current}`
+        const r = solveDay(day, current, TARGET)
+        expectInvariants(r, current, TARGET, label)
+        // 不足額が最小の獲得値より小さいときは、最小の獲得値1回が唯一の最小超過になる
+        if (TARGET - current < minValue) {
+          expect(r.status, label).toBe('over-shoot')
+          expect(r.patterns[0].reached, label).toBeCloseTo(current + minValue, 6)
+        }
+      }
+    }
+  })
+
+  it('端数の現在値でも優先指定の有無で件数が変わらない（§6-10）', () => {
+    for (const base of DAYS) {
+      const day = prepareDay(base)
+      const current = TARGET - 0.4
+      const plain = solveDay(day, current, TARGET)
+      const withPriority = solveDay(
+        day,
+        current,
+        TARGET,
+        day.options.slice(0, 3).map((o) => o.value),
+      )
+      expect(withPriority.patterns.length, day.name).toBe(plain.patterns.length)
+    }
+  })
+
+  it('丸めて 0 になる極小値が混ざっていても、他の値で解が返る', () => {
+    // 以前は unit が 0 になり、超過探索の上限が NaN → 1度も走査されず none だった
+    for (const values of [
+      [150, 0.00001],
+      [4500, 150, 0.000001],
+      [3750, 7500, 2812.5, 25000, 0.00002],
+    ]) {
+      const p = prep(values)
+      expect(p.options.length, `${values}`).toBeGreaterThan(0)
+      for (const current of [7_199_000, 6_850_000, 7_199_999.5]) {
+        expectInvariants(
+          solveDay(p, current, TARGET),
+          current,
+          TARGET,
+          `values=[${values}] current=${current}`,
+        )
+      }
+    }
+  })
+
+  it('編集されうる色々な値の集合と現在値で、必ず解が返る', () => {
+    const valueSets = [
+      [1],
+      [7],
+      [10_000_000],
+      [3, 5],
+      [999_983, 7919],
+      [0.0001],
+      [0.5, 0.25],
+      [1234.5678, 99.25],
+      [150, 150, 150], // 同値のみ（まとめて1件になる）
+      [56, 84, 112, 140, 168, 196, 224, 252, 280, 308, 336, 150],
+    ]
+    const currents = [0, 1, 6_850_000, 7_199_999, 7_199_999.6, 7_199_999.9999, 6_849_999.75]
+    for (const values of valueSets) {
+      const p = prep(values)
+      expect(p.options.length, `${values}`).toBeGreaterThan(0)
+      for (const current of currents) {
+        expectInvariants(
+          solveDay(p, current, TARGET),
+          current,
+          TARGET,
+          `values=[${values}] current=${current}`,
+        )
+      }
+    }
+  })
+})
+
+// レビューで見つかった具体的な不具合を、そのままの値で固定しておく
+describe('solveDay: 回帰（レビュー指摘の修正）', () => {
+  it('#1 不足額が丸めて0になっても none にならない（火曜 7,199,999.6）', () => {
+    const r = solveDay(prepareDay(DAYS[1]), 7_199_999.6, TARGET)
+    expect(r.status).toBe('over-shoot')
+    expect(shape(r.patterns[0])).toMatchObject({ values: [150], counts: [1] })
+    expect(r.patterns[0].reached).toBeCloseTo(7_200_149.6, 6)
+  })
+
+  it('#1 月曜（scaleFactor=10）でも同様（7,199,999.99）', () => {
+    const r = solveDay(prepareDay(DAYS[0]), 7_199_999.99, TARGET)
+    expect(r.status).toBe('over-shoot')
+    expect(shape(r.patterns[0])).toMatchObject({ values: [2500], counts: [1] })
+  })
+
+  it('#4 不足額の端数を切り捨てて目標を下回る解を返さない（木曜 7,197,499.75）', () => {
+    // 不足 2500.25。2500 に丸めると「2500×1 でぴったり」に見えてしまうが、
+    // 実際の到達値は 7,199,999.75 で目標を下回る。
+    const current = 7_197_499.75
+    const r = solveDay(prepareDay(DAYS[3]), current, TARGET)
+    expect(r.status).toBe('over-shoot')
+    expect(shape(r.patterns[0])).toMatchObject({ values: [4200], counts: [1] })
+    expect(r.patterns[0].reached).toBeCloseTo(7_201_699.75, 6)
+    expect(r.patterns.every((p) => p.reached >= TARGET)).toBe(true)
+  })
+
+  it('#4 端数の切り捨てで exact を誤検出しない（単一の値 1）', () => {
+    const current = 6_849_999.75
+    const r = solveDay(prep([1]), current, TARGET)
+    expect(r.status).toBe('over-shoot')
+    expect(r.patterns[0].reached).toBeCloseTo(7_200_000.75, 6)
+  })
+
+  it('#4 丸め誤差レベルのズレは今までどおり ぴったり と判定する', () => {
+    // 7,200,000 - 2812.5 は浮動小数の再計算で微小な誤差が出るが exact のまま
+    const r = solveDay(prepareDay(DAYS[0]), TARGET - 2812.5, TARGET)
+    expect(r.status).toBe('exact')
+    expect(r.patterns[0].reached).toBe(TARGET)
+  })
+
+  it('#3 極小値の行があっても他の値で解が返る（150 + 0.00001）', () => {
+    // 不足 1000 は 150 の倍数ではないので over-shoot。以前は none で 0 件だった。
+    const r = solveDay(prep([150, 0.00001]), 7_199_000, TARGET)
+    expect(r.status).toBe('over-shoot')
+    expect(shape(r.patterns[0])).toMatchObject({ values: [150], counts: [7] })
+    expect(r.patterns[0].reached).toBe(7_200_050)
+  })
+
+  it('#3 極小値の行があっても ぴったり を見つけられる（150 + 0.00001）', () => {
+    const r = solveDay(prep([150, 0.00001]), 7_199_100, TARGET)
+    expect(r.status).toBe('exact')
+    expect(shape(r.patterns[0])).toMatchObject({ values: [150], counts: [6] })
   })
 })
 
