@@ -166,6 +166,19 @@ body {
   font-weight: 700;
 }
 
+.remaining__invalid {
+  color: var(--red);
+  font-weight: 700;
+}
+
+/* フォーカス中も赤枠を維持する（:focus のほうが詳細度が高いので併記が要る） */
+.input-card__input--invalid,
+.input-card__input--invalid:focus {
+  border-color: var(--red);
+  color: var(--red);
+  box-shadow: none;
+}
+
 /* ---------- tabs ---------- */
 .tabs {
   display: grid;
@@ -261,9 +274,11 @@ body {
   padding: 8px 12px;
 }
 
+/* minmax(0, 1fr) にしないと、長い行動名で 1 列目が min-content まで広がり
+   カードごと横にはみ出す（コンテンツ幅 480px / 横スクロール禁止） */
 .card__parts li {
   display: grid;
-  grid-template-columns: 1fr auto auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: baseline;
   gap: 8px;
   padding: 4px 0;
@@ -273,6 +288,8 @@ body {
 .part__label {
   color: var(--text);
   line-height: 1.35;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .part__count {
@@ -390,17 +407,19 @@ body {
 
 .row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 92px 26px;
+  grid-template-columns: minmax(0, 1fr) 96px 34px;
   gap: 6px;
   align-items: center;
 }
 
+/* font-size は 16px 未満にしないこと。
+   iOS Safari は 16px 未満の入力欄にフォーカスするとページを自動ズームする。 */
 .row__label,
 .row__value {
   min-width: 0;
   padding: 8px 9px;
   font-family: inherit;
-  font-size: 12px;
+  font-size: 16px;
   color: var(--text);
   background: #0c1119;
   border: 1px solid var(--line);
@@ -420,14 +439,19 @@ body {
   border-color: var(--gold);
 }
 
-.row__value--invalid {
+.row__value--invalid,
+.row__value--invalid:focus {
   border-color: var(--red);
   color: var(--red);
 }
 
+/* 取り消しの効かない操作なので、タップ領域は指のサイズに合わせて確保する */
 .row__remove {
-  height: 26px;
-  font-size: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 40px;
+  font-size: 13px;
   color: var(--muted);
   background: transparent;
   border: 1px solid var(--line);
@@ -536,9 +560,12 @@ body {
   display: inline-flex;
   align-items: baseline;
   gap: 5px;
-  padding: 7px 10px;
+  /* 自作の長い行動名でもチップ1個がコンテナ幅を超えないようにする */
+  max-width: 100%;
+  min-height: 40px;
+  padding: 9px 12px;
   font-family: inherit;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--text);
   background: #0c1119;
@@ -546,6 +573,11 @@ body {
   border-radius: 999px;
   cursor: pointer;
   transition: 0.12s;
+}
+
+.chip__label {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .chip__value {

@@ -12,6 +12,7 @@ import {
   isModified,
   labelOf,
   newItem,
+  parseCurrent,
   parseNumber,
   prunePriority,
   resetDayItems,
@@ -21,11 +22,29 @@ import {
 import type { EditableDay, EditableItem, PriorityMap } from './state'
 
 const STORAGE_KEY = 'lastwar-calc:current'
+const PANEL_ID = 'day-panel'
+
+// サイトデータをブロックした環境やプライベートブラウズでは localStorage への
+// アクセス自体が throw する。保存できなくても計算には影響しないので黙って諦める。
+const loadRaw = (): string => {
+  try {
+    return localStorage.getItem(STORAGE_KEY) ?? ''
+  } catch {
+    return ''
+  }
+}
+const saveRaw = (value: string): void => {
+  try {
+    localStorage.setItem(STORAGE_KEY, value)
+  } catch {
+    /* 保存できない環境ではメモリ上だけで動かす */
+  }
+}
 
 export default function App() {
   const [days, setDays] = useState<EditableDay[]>(toEditable)
   const [dayKey, setDayKey] = useState<DayKey>(DAYS[0].key)
-  const [raw, setRaw] = useState<string>(() => localStorage.getItem(STORAGE_KEY) ?? '')
+  const [raw, setRaw] = useState<string>(loadRaw)
   // 計算に使う値を先に確認してほしいので、獲得値の一覧は最初から開いておく
   const [editing, setEditing] = useState(true)
   // 曜日ごとの「優先して使うアイテム」。値の配列で、先頭が①（最大3件）
@@ -33,11 +52,11 @@ export default function App() {
   const [pickingPriority, setPickingPriority] = useState(false)
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, raw)
+    saveRaw(raw)
   }, [raw])
 
   const day = findDay(days, dayKey)
-  const current = parseNumber(raw)
+  const { value: current, invalid: currentInvalid } = parseCurrent(raw)
 
   // 入力/編集の反応を優先し、重い探索は遅延させる
   const deferredDays = useDeferredValue(days)
@@ -105,15 +124,18 @@ export default function App() {
         </label>
         <input
           id="current"
-          className="input-card__input"
+          className={'input-card__input' + (currentInvalid ? ' input-card__input--invalid' : '')}
           type="text"
           inputMode="decimal"
           placeholder="例: 6850000"
           value={raw}
+          aria-invalid={currentInvalid}
           onChange={(e) => setRaw(e.target.value)}
         />
         <div className="remaining">
-          {remaining === null ? (
+          {currentInvalid ? (
+            <span className="remaining__invalid">0 以上の数値を入力してください</span>
+          ) : remaining === null ? (
             <span className="remaining__idle">現在値を入力してください</span>
           ) : remaining > 0 ? (
             <>
@@ -131,12 +153,15 @@ export default function App() {
         </div>
       </section>
 
-      <nav className="tabs" role="tablist">
+      <nav className="tabs" role="tablist" aria-label="曜日">
         {days.map((d) => (
           <button
             key={d.key}
+            id={`tab-${d.key}`}
             role="tab"
             aria-selected={d.key === dayKey}
+            aria-controls={PANEL_ID}
+            aria-label={d.name}
             className={'tab' + (d.key === dayKey ? ' tab--active' : '')}
             onClick={() => setDayKey(d.key)}
           >
@@ -146,7 +171,7 @@ export default function App() {
         ))}
       </nav>
 
-      <main className="results">
+      <main className="results" id={PANEL_ID} role="tabpanel" aria-labelledby={`tab-${dayKey}`}>
         <StatusNotice result={result} day={day} />
 
         <section className="editor">
@@ -174,6 +199,7 @@ export default function App() {
                         type="text"
                         value={item.label}
                         placeholder="行動名"
+                        aria-label="行動名"
                         onChange={(e) => editItem(item.id, { label: e.target.value })}
                       />
                       <input
@@ -182,12 +208,14 @@ export default function App() {
                         inputMode="decimal"
                         value={item.raw}
                         placeholder="0"
+                        aria-label={`${item.label.trim() || '行動'}の獲得値`}
+                        aria-invalid={invalid}
                         onChange={(e) => editItem(item.id, { raw: e.target.value })}
                       />
                       <button
                         className="row__remove"
                         onClick={() => removeItem(item.id)}
-                        aria-label="この行を削除"
+                        aria-label={`${item.label.trim() || 'この行'}を削除`}
                       >
                         ✕
                       </button>

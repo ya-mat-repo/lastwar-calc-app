@@ -129,11 +129,22 @@ function modInverse(a: number, m: number): number {
 
 /** 小数点以下の桁数（最大 MAX_DECIMALS 桁まで） */
 const MAX_DECIMALS = 4
+const DECIMAL_LIMIT = 10 ** MAX_DECIMALS
 function decimalPlaces(n: number): number {
   const s = String(n)
   const dot = s.indexOf('.')
   if (dot < 0 || s.includes('e')) return 0
   return Math.min(s.length - dot - 1, MAX_DECIMALS)
+}
+
+/**
+ * 扱える桁数（MAX_DECIMALS）に丸めた値。
+ * 整数化のときだけ丸めると、探索に使う値（scaled）と表示・集計に使う値（value）がずれ、
+ * 「ぴったり作れるのに exact を取り逃す」「over-shoot なのに到達値が目標ちょうど」が起きる。
+ * 先に丸めて両者を必ず一致させる。
+ */
+function roundToLimit(n: number): number {
+  return Math.round(n * DECIMAL_LIMIT) / DECIMAL_LIMIT
 }
 
 /**
@@ -144,10 +155,14 @@ function decimalPlaces(n: number): number {
 export function prepareDay(day: DaySource): PreparedDay {
   const byValue = new Map<number, string[]>()
   for (const item of day.items) {
-    if (!Number.isFinite(item.value) || item.value <= 0) continue
-    const labels = byValue.get(item.value)
+    if (!Number.isFinite(item.value)) continue
+    // 5桁以上の小数はここで 4 桁に丸める。以降 value と scaled は必ず整合する。
+    // 丸めて 0 以下になる極小値（0.00001 など）はここで落ちる
+    const value = roundToLimit(item.value)
+    if (value <= 0) continue
+    const labels = byValue.get(value)
     if (labels) labels.push(item.label)
-    else byValue.set(item.value, [item.label])
+    else byValue.set(value, [item.label])
   }
 
   const scaleFactor = 10 ** Math.max(0, ...[...byValue.keys()].map(decimalPlaces))

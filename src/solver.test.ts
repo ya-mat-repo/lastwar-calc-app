@@ -508,6 +508,36 @@ describe('solveDay: 不変条件 §6-12（選択肢があれば必ず解が返�
     }
   })
 
+  // 実データの不変条件チェック（§6-1〜7）は優先指定なしでしか回していなかったので、
+  // 優先指定ありでも同じ不変条件が保たれることを確認する
+  it('優先指定があっても §6 の不変条件が保たれる', () => {
+    for (const base of DAYS) {
+      const day = prepareDay(base)
+      const values = day.options.map((o) => o.value)
+      const priorities = [
+        [values[0]],
+        values.slice(0, 2),
+        values.slice(0, 3),
+        values.slice(-3),
+        [99999], // 存在しない値
+      ]
+      for (const priority of priorities) {
+        for (const current of [0, 6_850_000, 7_199_999, 7_199_999.6]) {
+          const label = `${day.name} / [${priority}] / ${current}`
+          const r = solveDay(day, current, TARGET, priority)
+          expectInvariants(r, current, TARGET, label)
+          // §5.4: 優先スコアは重み（①=3, ②=2, ③=1）の合計
+          for (const p of r.patterns) {
+            expect(
+              p.score,
+              label,
+            ).toBe(scoreOf(p.parts.map((x) => x.option.value), priority))
+          }
+        }
+      }
+    }
+  })
+
   it('編集されうる色々な値の集合と現在値で、必ず解が返る', () => {
     const valueSets = [
       [1],
@@ -590,6 +620,33 @@ describe('solveDay: 回帰（レビュー指摘の修正）', () => {
     expect(r.status).toBe('exact')
     expect(shape(r.patterns[0])).toMatchObject({ values: [150], counts: [6] })
   })
+
+  it('#5 小数5桁以上の値は4桁に丸め、探索値と表示値を一致させる', () => {
+    const p = prep([100.12345, 7])
+    expect(p.options.map((o) => o.value)).toEqual([100.1235, 7])
+    // 丸めずに整数化していたときは scaled と value*scaleFactor がずれていた
+    for (const o of p.options) {
+      expect(Math.round(o.value * p.scaleFactor)).toBe(o.scaled)
+    }
+  })
+
+  it('#5 over-shoot なのに到達値が目標値ちょうど、にならない', () => {
+    // 修正前は [100.12345, 7] / 不足 1001.2345 が
+    // 「over-shoot」なのに到達 7,200,000（超過 0）になっていた
+    const valueSets = [[100.12345, 7], [0.00012345], [1.23456789, 5], [2812.5, 2500]]
+    const currents = [TARGET - 1001.2345, TARGET - 1234.5, TARGET - 0.5, 6_850_000]
+    for (const values of valueSets) {
+      const p = prep(values)
+      for (const current of currents) {
+        const r = solveDay(p, current, TARGET)
+        const label = `values=[${values}] current=${current} status=${r.status}`
+        for (const x of r.patterns) {
+          if (r.status === 'exact') expect(x.reached, label).toBe(TARGET)
+          else expect(x.reached - TARGET, label).toBeGreaterThan(1e-6)
+        }
+      }
+    }
+  })
 })
 
 describe('solveDay: 境界と異常系', () => {
@@ -636,6 +693,20 @@ describe('solveDay: 境界と異常系', () => {
     const r = solveDay(day, TARGET - 312.5, TARGET)
     expect(r.status).toBe('over-shoot')
     expect(r.patterns[0].reached).toBe(TARGET - 312.5 + 2500)
+  })
+
+  // §5.5 / §9-2: 走査が MAX_OVERSHOOT_STEPS(5000) に達しても
+  // 「1種類だけで作れる最小の超過値」で必ず解を返す
+  it('超過探索の走査上限に達しても解が返る', () => {
+    // unit が 100 万規模なので、start から 5000 ステップでは何も見つからない
+    const r = solveDay(prep([999983, 999979]), 0, TARGET)
+    expect(r.status).toBe('over-shoot')
+    expect(r.patterns.length).toBeGreaterThan(0)
+    expect(r.patterns[0].reached).toBeGreaterThanOrEqual(TARGET)
+    // 保証値は 1 種類だけで作れる最小の超過値
+    expect(shape(r.patterns[0])).toMatchObject({ values: [999979], counts: [8] })
+    expect(r.patterns[0].reached).toBe(999979 * 8)
+    expect(new Set(r.patterns.map((p) => p.reached)).size).toBe(1)
   })
 
   it('選択肢が多い曜日でも実用的な速度で返る', () => {

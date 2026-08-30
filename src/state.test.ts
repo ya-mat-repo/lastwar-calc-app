@@ -5,6 +5,7 @@ import {
   MAX_PRIORITY,
   applyPriorityTap,
   isModified,
+  parseCurrent,
   labelOf,
   parseNumber,
   prunePriority,
@@ -23,8 +24,27 @@ describe('parseNumber', () => {
     ['', null],
     ['   ', null],
     ['abc', null],
+    // 先頭の `-` は残す。捨てると -5 が 5 になり、負数の行を弾けなくなる
+    ['-5', -5],
+    ['-2812.5', -2812.5],
+    [' -100 ', -100],
+    ['-', null],
+    ['1-2', 12], // 先頭以外の `-` は今までどおり捨てる
   ])('%o → %o', (input, expected) => {
     expect(parseNumber(input)).toBe(expected)
+  })
+})
+
+describe('parseCurrent', () => {
+  it.each<[string, number | null, boolean]>([
+    ['6850000', 6850000, false],
+    ['', null, false],
+    ['abc', null, false],
+    ['-100', null, true], // 符号を黙って落とさず、入力ミスとして返す
+    ['-0.5', null, true],
+    ['0', 0, false],
+  ])('%o → value=%o invalid=%o', (input, value, invalid) => {
+    expect(parseCurrent(input)).toEqual({ value, invalid })
   })
 })
 
@@ -56,6 +76,17 @@ describe('toPrepared', () => {
 
   it('全行が無効なら選択肢0件になる', () => {
     expect(toPrepared(day([{ label: 'a', raw: '' }])).options).toEqual([])
+  })
+
+  it('負数の行は計算対象から外す（SPEC §3.4）', () => {
+    const p = toPrepared(
+      day([
+        { label: 'a', raw: '100' },
+        { label: 'b', raw: '-50' },
+        { label: 'c', raw: '-2812.5' },
+      ]),
+    )
+    expect(p.options.map((o) => o.value)).toEqual([100])
   })
 })
 

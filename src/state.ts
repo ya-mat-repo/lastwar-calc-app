@@ -54,15 +54,31 @@ export function findDay<T extends { key: string }>(days: readonly T[], key: DayK
 export const fmt = (n: number): string =>
   n.toLocaleString('ja-JP', { maximumFractionDigits: 4 })
 
-/** 入力文字列 → 数値。数字と小数点以外は捨て、空なら null */
+/**
+ * 入力文字列 → 数値。数字と小数点以外は捨て、空なら null。
+ * 先頭の `-` だけは残す。捨ててしまうと `-5` が 5 になり、
+ * 「負数の行は計算対象から外して赤枠にする」（SPEC §3.4）が成立しないため。
+ */
 export function parseNumber(raw: string): number | null {
+  const negative = /^\s*-/.test(raw)
   const cleaned = raw.replace(/[^0-9.]/g, '')
   if (cleaned === '') return null
-  const n = Number(cleaned)
+  const n = Number((negative ? '-' : '') + cleaned)
   return Number.isFinite(n) ? n : null
 }
 
-/** 編集状態 → ソルバー入力。空欄・0・不正な値の行は計算対象から外す */
+/**
+ * 現在値の入力を解釈する。
+ * 負数は「マイナスを打ち間違えた」以外に意味が無いので、黙って符号を落とさず入力ミスとして返す。
+ */
+export function parseCurrent(raw: string): { value: number | null; invalid: boolean } {
+  const n = parseNumber(raw)
+  if (n === null) return { value: null, invalid: false }
+  if (n < 0) return { value: null, invalid: true }
+  return { value: n, invalid: false }
+}
+
+/** 編集状態 → ソルバー入力。空欄・0・負数・不正な値の行は計算対象から外す */
 export function toPrepared(day: EditableDay): PreparedDay {
   return prepareDay({
     ...day,
