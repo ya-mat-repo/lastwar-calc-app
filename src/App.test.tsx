@@ -438,6 +438,28 @@ describe('App: 優先して使うアイテム', () => {
   })
 })
 
+describe('App: 画面の並び順（SPEC §3.1）', () => {
+  /** results 内の主要ブロックを出現順に並べる */
+  const blocks = (container: HTMLElement): string[] =>
+    [...(container.querySelector('.results') as HTMLElement).querySelectorAll(
+      '.editor, .priority, .notice, .cards',
+    )].map((e) => e.className.split(' ')[0])
+
+  it('編集パネル → 優先パネル → 結果メッセージ → 結果カード の順に並ぶ', async () => {
+    const { container } = render(<App />)
+    typeCurrent('6850000')
+    await waitFor(() => expect(cards(container).length).toBeGreaterThan(0))
+
+    // 計算に使う値を先に確認させ、メッセージは結果カードの見出しとして直前に置く
+    expect(blocks(container)).toEqual(['editor', 'priority', 'notice', 'cards'])
+  })
+
+  it('結果が出ない状態でもメッセージは編集パネルより下に出る', () => {
+    const { container } = render(<App />)
+    expect(blocks(container)).toEqual(['editor', 'priority', 'notice'])
+  })
+})
+
 describe('App: アクセシビリティの配線', () => {
   it('タブが結果パネルを指しており、選択状態が排他になっている', () => {
     render(<App />)

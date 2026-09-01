@@ -189,8 +189,6 @@ export default function App() {
       </nav>
 
       <main className="results" id={PANEL_ID} role="tabpanel" aria-labelledby={`tab-${dayKey}`}>
-        <StatusNotice result={result} day={day} />
-
         <section className="editor">
           <button className="editor__toggle" onClick={() => setEditing((v) => !v)}>
             <span className="editor__title">{day.name}の獲得値</span>
@@ -323,6 +321,8 @@ export default function App() {
           )}
         </section>
 
+        <StatusNotice result={result} day={day} />
+
         <PatternList result={result} priority={priority} />
       </main>
 
@@ -413,7 +413,7 @@ function SpeedupEditor({
   )
 }
 
-/** 結果の見出しメッセージ（獲得値エディタの上に置く） */
+/** 結果の見出しメッセージ（結果カードの直前に置く） */
 function StatusNotice({ result, day }: { result: SolveResult | null; day: EditableDay }) {
   if (!result) {
     return <p className="notice">現在値を入力すると、{day.name}の組み合わせを計算します。</p>
