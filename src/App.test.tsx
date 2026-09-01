@@ -171,6 +171,179 @@ describe('App: 獲得値の編集', () => {
   })
 })
 
+describe('App: 加速アイテム', () => {
+  /** 加速グループの「サイズ名 → 表示値」 */
+  const sizeRows = (container: HTMLElement): [string, string][] =>
+    [...container.querySelectorAll('.speedup__list .size')].map((row) => [
+      row.querySelector('.size__label')?.textContent ?? '',
+      row.querySelector('.size__value')?.textContent ?? '',
+    ])
+
+  const checkbox = (container: HTMLElement, label: string): HTMLInputElement => {
+    const row = [...container.querySelectorAll('.speedup__list .size')].find(
+      (r) => r.querySelector('.size__label')?.textContent === label,
+    )
+    if (!row) throw new Error(`${label} の行が無い`)
+    return row.querySelector('input[type=checkbox]') as HTMLInputElement
+  }
+
+  it('火曜には加速グループが出て、1分の値から全サイズが計算される', () => {
+    const { container } = render(<App />)
+    fireEvent.click(screen.getByRole('tab', { name: '火曜日' }))
+
+    expect(screen.getByText('建造の残り時間短縮')).toBeTruthy()
+    expect(screen.getByLabelText('基準 1分 =')).toHaveProperty('value', '150')
+    expect(sizeRows(container)).toEqual([
+      ['1分', '150'],
+      ['5分', '750'],
+      ['1時間', '9,000'],
+      ['3時間', '27,000'],
+      ['8時間', '72,000'],
+    ])
+  })
+
+  it('派生サイズには入力欄を出さない（編集できるのは基準だけ）', () => {
+    const { container } = render(<App />)
+    fireEvent.click(screen.getByRole('tab', { name: '火曜日' }))
+
+    const group = container.querySelector('.speedup') as HTMLElement
+    const textInputs = group.querySelectorAll('input:not([type=checkbox])')
+    expect(textInputs).toHaveLength(1)
+    expect((textInputs[0] as HTMLInputElement).id).toBe('speedup-base')
+  })
+
+  it('基準値を変えると全サイズが追従する', async () => {
+    const { container } = render(<App />)
+    fireEvent.click(screen.getByRole('tab', { name: '火曜日' }))
+
+    fireEvent.change(screen.getByLabelText('基準 1分 ='), { target: { value: '200' } })
+
+    await waitFor(() =>
+      expect(sizeRows(container)).toEqual([
+        ['1分', '200'],
+        ['5分', '1,000'],
+        ['1時間', '12,000'],
+        ['3時間', '36,000'],
+        ['8時間', '96,000'],
+      ]),
+    )
+  })
+
+  it('基準値が空なら値を出さず、注意書きを赤くする', async () => {
+    const { container } = render(<App />)
+    fireEvent.click(screen.getByRole('tab', { name: '火曜日' }))
+
+    fireEvent.change(screen.getByLabelText('基準 1分 ='), { target: { value: '' } })
+
+    expect(await screen.findByText('1分あたりの値を入れてください')).toBeTruthy()
+    expect(screen.getByLabelText('基準 1分 =').getAttribute('aria-invalid')).toBe('true')
+    expect(sizeRows(container).map(([, v]) => v)).toEqual(['—', '—', '—', '—', '—'])
+  })
+
+  it('加速が計算に使われる（7,199,850 は 1分短縮×1 でぴったり）', async () => {
+    const { container } = render(<App />)
+    fireEvent.click(screen.getByRole('tab', { name: '火曜日' }))
+    typeCurrent('7199850')
+
+    await waitFor(() => expect(cards(container).length).toBeGreaterThan(0))
+    const first = cards(container)[0]
+    expect(within(first).getByText('残り時間1分短縮')).toBeTruthy()
+    expect(within(first).getByText('×1')).toBeTruthy()
+  })
+
+  it('持っていないサイズのチェックを外すと候補から消える', async () => {
+    const { container } = render(<App />)
+    fireEvent.click(screen.getByRole('tab', { name: '火曜日' }))
+    typeCurrent('7128000') // 不足 72,000 ＝ 8時間×1
+
+    await waitFor(() => {
+      expect(within(cards(container)[0]).queryByText('残り時間8時間短縮')).toBeTruthy()
+    })
+
+    fireEvent.click(checkbox(container, '8時間'))
+
+    // 8時間が無くなるので、8時間×1 の解は出せなくなる
+    await waitFor(() => {
+      expect(within(cards(container)[0]).queryByText('残り時間8時間短縮')).toBeNull()
+    })
+    expect(checkbox(container, '8時間').checked).toBe(false)
+    // 外した行も一覧には残る（値は見える）
+    expect(sizeRows(container).map(([s]) => s)).toContain('8時間')
+  })
+
+  it('チェックを外すと件数表示が減り、編集済みになる', async () => {
+    const { container } = render(<App />)
+    fireEvent.click(screen.getByRole('tab', { name: '火曜日' }))
+    expect(screen.getByText('6件')).toBeTruthy() // 加速5 + 生存者募集1
+
+    fireEvent.click(checkbox(container, '3時間'))
+
+    expect(await screen.findByText('5件')).toBeTruthy()
+    expect(screen.getByText('編集済み')).toBeTruthy()
+  })
+
+  it('チェックを外したサイズは優先チップからも消え、優先指定も外れる', async () => {
+    const { container } = render(<App />)
+    fireEvent.click(screen.getByRole('tab', { name: '火曜日' }))
+    typeCurrent('6850000')
+    await waitFor(() => expect(cards(container).length).toBeGreaterThan(0))
+
+    const panel = openPriority(container)
+    fireEvent.click(chip(panel, /8時間短縮/))
+    await waitFor(() => expect(ranksIn(panel)).toEqual(['①']))
+
+    fireEvent.click(checkbox(container, '8時間'))
+
+    await waitFor(() =>
+      expect(within(panel).queryByRole('button', { name: /8時間短縮/ })).toBeNull(),
+    )
+    expect(ranksIn(panel)).toEqual([])
+  })
+
+  it('加速グループごと削除できて、初期値に戻せる', async () => {
+    const { container } = render(<App />)
+    fireEvent.click(screen.getByRole('tab', { name: '火曜日' }))
+
+    fireEvent.click(screen.getByRole('button', { name: '加速グループを削除' }))
+    await waitFor(() => expect(container.querySelector('.speedup')).toBeNull())
+    expect(screen.getByText('編集済み')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: /初期値に戻す/ }))
+    await waitFor(() => expect(container.querySelector('.speedup')).toBeTruthy())
+    expect(sizeRows(container).map(([, v]) => v)).toEqual([
+      '150',
+      '750',
+      '9,000',
+      '27,000',
+      '72,000',
+    ])
+  })
+
+  it('「初期値に戻す」でチェックも全部戻る', async () => {
+    const { container } = render(<App />)
+    fireEvent.click(screen.getByRole('tab', { name: '火曜日' }))
+    fireEvent.click(checkbox(container, '3時間'))
+    fireEvent.click(checkbox(container, '8時間'))
+    await waitFor(() => expect(checkbox(container, '8時間').checked).toBe(false))
+
+    fireEvent.click(screen.getByRole('button', { name: /初期値に戻す/ }))
+    await waitFor(() => expect(checkbox(container, '3時間').checked).toBe(true))
+    expect(checkbox(container, '8時間').checked).toBe(true)
+  })
+
+  it('加速のない月曜にはグループを出さない', () => {
+    const { container } = render(<App />)
+    expect(container.querySelector('.speedup')).toBeNull()
+  })
+
+  it('金曜は建造・科学研究・訓練が1グループにまとまっている', () => {
+    const { container } = render(<App />)
+    fireEvent.click(screen.getByRole('tab', { name: '金曜日' }))
+    expect(screen.getByText('建造・科学研究・訓練の残り時間短縮')).toBeTruthy()
+    expect(container.querySelectorAll('.speedup')).toHaveLength(1)
+  })
+})
+
 describe('App: 優先して使うアイテム', () => {
   it('タップした順に①②③が付き、結果カードにも印が出る', async () => {
     const { container } = render(<App />)
@@ -280,9 +453,8 @@ describe('App: アクセシビリティの配線', () => {
   it('獲得値が0件なら優先パネルを開けない', async () => {
     render(<App />)
     fireEvent.click(screen.getByRole('tab', { name: '火曜日' }))
-    for (const label of ['建造の残り時間1分短縮', '生存者募集1回']) {
-      fireEvent.click(screen.getByRole('button', { name: `${label}を削除` }))
-    }
+    fireEvent.click(screen.getByRole('button', { name: '生存者募集1回を削除' }))
+    fireEvent.click(screen.getByRole('button', { name: '加速グループを削除' }))
     await waitFor(() =>
       expect(screen.getByRole('button', { name: /優先して使うアイテム/ })).toHaveProperty(
         'disabled',

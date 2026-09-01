@@ -7,6 +7,7 @@ import {
   MAX_PRIORITY,
   RANK_MARK,
   applyPriorityTap,
+  countRows,
   findDay,
   fmt,
   isModified,
@@ -15,11 +16,14 @@ import {
   parseCurrent,
   parseNumber,
   prunePriority,
+  removeSpeedup,
   resetDayItems,
+  speedupRows,
   toEditable,
+  toggleSpeedupSize,
   toPrepared,
 } from './state'
-import type { EditableDay, EditableItem, PriorityMap } from './state'
+import type { EditableDay, EditableItem, EditableSpeedup, PriorityMap } from './state'
 
 const STORAGE_KEY = 'lastwar-calc:current'
 const PANEL_ID = 'day-panel'
@@ -94,6 +98,19 @@ export default function App() {
   const addItem = (): void => updateDay((d) => ({ ...d, items: [...d.items, newItem()] }))
 
   const resetDay = (): void => setDays((prev) => resetDayItems(prev, dayKey))
+
+  /** 加速の基準値（1分あたり）。変えると全サイズが追従する */
+  const editSpeedupBase = (raw: string): void =>
+    updateDay((d) => (d.speedup ? { ...d, speedup: { ...d.speedup, raw } } : d))
+
+  const toggleSize = (key: string): void =>
+    updateDay((d) =>
+      d.speedup
+        ? { ...d, speedup: { ...d.speedup, enabled: toggleSpeedupSize(d.speedup.enabled, key) } }
+        : d,
+    )
+
+  const removeSpeedupGroup = (): void => updateDay(removeSpeedup)
 
   /** タップ順に①②③。選択済みをもう一度押すと外れ、後ろの順位が繰り上がる */
   const togglePriority = (value: number): void =>
@@ -177,7 +194,7 @@ export default function App() {
         <section className="editor">
           <button className="editor__toggle" onClick={() => setEditing((v) => !v)}>
             <span className="editor__title">{day.name}の獲得値</span>
-            <span className="editor__count">{day.items.length}件</span>
+            <span className="editor__count">{countRows(day)}件</span>
             {modified && <span className="editor__badge">編集済み</span>}
             <span className="editor__note">※最初に確認してね</span>
             <span className="editor__caret">{editing ? '▲' : '▼'}</span>
@@ -188,6 +205,16 @@ export default function App() {
               <p className="editor__hint">
                 値は自由に変更できます。変更はこのページ内だけで有効で、リロードすると初期値に戻ります。
               </p>
+
+              {day.speedup && (
+                <SpeedupEditor
+                  speedup={day.speedup}
+                  onChangeBase={editSpeedupBase}
+                  onToggleSize={toggleSize}
+                  onRemove={removeSpeedupGroup}
+                />
+              )}
+
               <ul className="editor__list">
                 {day.items.map((item) => {
                   const value = parseNumber(item.raw)
@@ -304,6 +331,85 @@ export default function App() {
         → 合計回数が少ない順（上位20件）
       </footer>
     </div>
+  )
+}
+
+/**
+ * 加速アイテムの編集。
+ * 編集できるのは「1分あたり」だけで、他のサイズはそこから計算した読み取り専用の値を出す。
+ * disabled な入力欄にすると「押せば編集できそう」に見えるので、あえて input にしていない。
+ */
+function SpeedupEditor({
+  speedup,
+  onChangeBase,
+  onToggleSize,
+  onRemove,
+}: {
+  speedup: EditableSpeedup
+  onChangeBase: (raw: string) => void
+  onToggleSize: (key: string) => void
+  onRemove: () => void
+}) {
+  const rows = speedupRows(speedup)
+  const base = parseNumber(speedup.raw)
+  const invalid = base === null || base <= 0
+
+  return (
+    <section className="speedup">
+      <div className="speedup__head">
+        <span className="speedup__tag">加速</span>
+        <span className="speedup__name">{speedup.name}の残り時間短縮</span>
+        <button className="speedup__remove" onClick={onRemove} aria-label="加速グループを削除">
+          ✕
+        </button>
+      </div>
+
+      <div className="speedup__base">
+        <label className="speedup__baseLabel" htmlFor="speedup-base">
+          基準 1分 =
+        </label>
+        <input
+          id="speedup-base"
+          className={'speedup__baseInput' + (invalid ? ' speedup__baseInput--invalid' : '')}
+          type="text"
+          inputMode="decimal"
+          placeholder="0"
+          value={speedup.raw}
+          aria-invalid={invalid}
+          aria-describedby="speedup-base-note"
+          onChange={(e) => onChangeBase(e.target.value)}
+        />
+      </div>
+      <p
+        className={'speedup__note' + (invalid ? ' speedup__note--invalid' : '')}
+        id="speedup-base-note"
+      >
+        {invalid
+          ? '1分あたりの値を入れてください'
+          : '編集できるのはここだけです。ほかのサイズは自動で計算されます。'}
+      </p>
+
+      <p className="speedup__listTitle">持っている加速アイテム</p>
+      <ul className="speedup__list">
+        {rows.map((row) => (
+          <li key={row.size.key}>
+            <label className={'size' + (row.enabled ? '' : ' size--off')}>
+              <input
+                type="checkbox"
+                className="size__check"
+                checked={row.enabled}
+                onChange={() => onToggleSize(row.size.key)}
+              />
+              <span className="size__label">{row.size.label}</span>
+              <span className="size__value">{row.value === null ? '—' : fmt(row.value)}</span>
+              <span className="size__formula">
+                {row.size.minutes === 1 ? '基準' : `1分 × ${row.size.minutes}`}
+              </span>
+            </label>
+          </li>
+        ))}
+      </ul>
+    </section>
   )
 }
 

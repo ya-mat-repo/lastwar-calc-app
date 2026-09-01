@@ -405,6 +405,177 @@ body {
   gap: 6px;
 }
 
+/* ---------- 加速グループ ---------- */
+.speedup {
+  margin-bottom: 12px;
+  padding: 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--gold-dim);
+  border-radius: 8px;
+}
+
+.speedup__head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 10px;
+}
+
+.speedup__tag {
+  flex: none;
+  font-size: 10px;
+  font-weight: 800;
+  color: #241c05;
+  background: var(--gold);
+  border-radius: 4px;
+  padding: 2px 6px;
+}
+
+.speedup__name {
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.speedup__remove {
+  flex: none;
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 40px;
+  font-size: 13px;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.speedup__remove:hover {
+  color: var(--red);
+  border-color: var(--red);
+}
+
+.speedup__base {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.speedup__baseLabel {
+  flex: none;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--gold-dim);
+  letter-spacing: 0.04em;
+}
+
+/* 16px 未満にしないこと（iOS Safari の自動ズーム対策） */
+.speedup__baseInput {
+  min-width: 0;
+  flex: 1;
+  max-width: 120px;
+  padding: 8px 9px;
+  font-family: inherit;
+  font-size: 16px;
+  font-weight: 700;
+  text-align: right;
+  color: var(--gold);
+  font-variant-numeric: tabular-nums;
+  background: #0c1119;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  outline: none;
+}
+
+.speedup__baseInput:focus {
+  border-color: var(--gold);
+}
+
+.speedup__baseInput--invalid,
+.speedup__baseInput--invalid:focus {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+.speedup__note {
+  margin-top: 6px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.speedup__note--invalid {
+  color: var(--red);
+  font-weight: 700;
+}
+
+.speedup__listTitle {
+  margin: 12px 0 4px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.speedup__list {
+  list-style: none;
+}
+
+/* ラベル全体をタップ領域にする（チェックボックス自体は小さいため） */
+.size {
+  display: grid;
+  grid-template-columns: auto 4.5em minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 2px 4px;
+  cursor: pointer;
+}
+
+.size__check {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--gold);
+  cursor: pointer;
+}
+
+.size__label {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.size__value {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--gold);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.size__formula {
+  font-size: 10px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  min-width: 62px;
+  text-align: right;
+}
+
+/* チェックを外したものは計算に使わないので、値も薄くする */
+.size--off .size__label,
+.size--off .size__value,
+.size--off .size__formula {
+  color: var(--muted);
+  opacity: 0.55;
+  font-weight: 600;
+}
+
 .row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 96px 34px;

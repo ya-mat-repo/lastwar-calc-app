@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { DAYS } from './data'
+import { DAYS, SPEEDUP_SIZES } from './data'
 import type { EditableDay, EditableItem } from './state'
 import {
   MAX_PRIORITY,
@@ -9,8 +9,12 @@ import {
   labelOf,
   parseNumber,
   prunePriority,
+  removeSpeedup,
+  speedupItems,
+  speedupRows,
   toEditable,
   togglePriorityValue,
+  toggleSpeedupSize,
   toPrepared,
 } from './state'
 
@@ -185,6 +189,136 @@ describe('prunePriority', () => {
 
   it('選択肢が空なら全て落ちる', () => {
     expect(prunePriority([100], [])).toEqual([])
+  })
+})
+
+describe('加速グループ', () => {
+  const speedup = { name: '建造', raw: '150', enabled: SPEEDUP_SIZES.map((s) => s.key) }
+
+  it('1分あたりの値から全サイズを計算する', () => {
+    expect(speedupRows(speedup).map((r) => [r.size.label, r.value])).toEqual([
+      ['1分', 150],
+      ['5分', 750],
+      ['1時間', 9000],
+      ['3時間', 27000],
+      ['8時間', 72000],
+    ])
+  })
+
+  // 1曜日に加速グループは1つしかないので、行動名に種類名（建造など）は付けない
+  it('行動名は「残り時間◯◯短縮」になる', () => {
+    expect(speedupRows(speedup).map((r) => r.label)).toEqual([
+      '残り時間1分短縮',
+      '残り時間5分短縮',
+      '残り時間1時間短縮',
+      '残り時間3時間短縮',
+      '残り時間8時間短縮',
+    ])
+  })
+
+  it('グループ名を変えても行動名は変わらない', () => {
+    expect(speedupRows({ ...speedup, name: '建造・科学研究・訓練' }).map((r) => r.label)).toEqual(
+      speedupRows(speedup).map((r) => r.label),
+    )
+  })
+
+  it('基準値を変えると全サイズが追従する', () => {
+    expect(speedupRows({ ...speedup, raw: '200' }).map((r) => r.value)).toEqual([
+      200, 1000, 12000, 36000, 96000,
+    ])
+  })
+
+  it('基準値が空・0・負数なら値を出さず、計算にも使わない', () => {
+    for (const raw of ['', '0', '-150', 'abc']) {
+      expect(speedupRows({ ...speedup, raw }).every((r) => r.value === null), raw).toBe(true)
+      expect(speedupItems({ ...speedup, raw }), raw).toEqual([])
+    }
+  })
+
+  it('チェックを外したサイズは計算に使わない（表示は残る）', () => {
+    const partial = { ...speedup, enabled: ['1m', '1h'] }
+    expect(speedupItems(partial).map((i) => i.value)).toEqual([150, 9000])
+    // 外したものも「持っていない」として一覧には並ぶ
+    expect(speedupRows(partial).map((r) => r.enabled)).toEqual([true, false, true, false, false])
+  })
+
+  it('チェックを全部外すと計算対象が0件になる', () => {
+    expect(speedupItems({ ...speedup, enabled: [] })).toEqual([])
+  })
+
+  it('加速グループが無ければ何も足さない', () => {
+    expect(speedupItems(undefined)).toEqual([])
+  })
+
+  it('toggleSpeedupSize は追加と解除を切り替える', () => {
+    expect(toggleSpeedupSize(['1m', '5m'], '1h')).toEqual(['1m', '5m', '1h'])
+    expect(toggleSpeedupSize(['1m', '5m'], '5m')).toEqual(['1m'])
+    const orig = ['1m']
+    toggleSpeedupSize(orig, '5m')
+    expect(orig).toEqual(['1m']) // 元の配列を壊さない
+  })
+
+  it('removeSpeedup でグループごと消える', () => {
+    const tue = toEditable().find((d) => d.key === 'tue')
+    expect(tue?.speedup).toBeTruthy()
+    expect(removeSpeedup(tue!).speedup).toBeUndefined()
+  })
+})
+
+describe('toPrepared: 加速の展開', () => {
+  const tue = (): EditableDay => toEditable().find((d) => d.key === 'tue')!
+
+  it('チェックが入っているサイズだけが選択肢になる', () => {
+    const p = toPrepared(tue())
+    expect(p.options.map((o) => o.value)).toEqual([72000, 27000, 9000, 4500, 750, 150])
+  })
+
+  it('チェックを外すとその値が選択肢から消える', () => {
+    const day = tue()
+    const p = toPrepared({ ...day, speedup: { ...day.speedup!, enabled: ['1m', '5m'] } })
+    expect(p.options.map((o) => o.value)).toEqual([4500, 750, 150])
+  })
+
+  it('基準値が無効なら加速はまるごと外れ、他の行だけ残る', () => {
+    const day = tue()
+    const p = toPrepared({ ...day, speedup: { ...day.speedup!, raw: '' } })
+    expect(p.options.map((o) => o.value)).toEqual([4500])
+  })
+
+  it('金曜は建造・科学研究・訓練を1グループとして展開する', () => {
+    const fri = toEditable().find((d) => d.key === 'fri')!
+    const p = toPrepared(fri)
+    expect(p.options.find((o) => o.value === 9000)?.labels).toEqual(['残り時間1時間短縮'])
+    // 兵士訓練11種 + 加速5種
+    expect(p.options).toHaveLength(16)
+  })
+
+  it('加速の無い曜日（月・木）は今までどおり', () => {
+    const mon = toEditable().find((d) => d.key === 'mon')!
+    expect(mon.speedup).toBeUndefined()
+    expect(toPrepared(mon).options).toHaveLength(9)
+  })
+})
+
+describe('isModified: 加速グループ', () => {
+  const tue = (): EditableDay => toEditable().find((d) => d.key === 'tue')!
+
+  it('初期状態では false', () => {
+    expect(isModified(tue())).toBe(false)
+  })
+
+  it('基準値を変えると true', () => {
+    const day = tue()
+    expect(isModified({ ...day, speedup: { ...day.speedup!, raw: '200' } })).toBe(true)
+  })
+
+  it('チェックを外すと true', () => {
+    const day = tue()
+    expect(isModified({ ...day, speedup: { ...day.speedup!, enabled: ['1m'] } })).toBe(true)
+  })
+
+  it('グループごと削除すると true', () => {
+    expect(isModified(removeSpeedup(tue()))).toBe(true)
   })
 })
 

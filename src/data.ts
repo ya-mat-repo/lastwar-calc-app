@@ -8,12 +8,60 @@ export interface DayItem {
   readonly value: number
 }
 
+/** 加速アイテムのサイズ。獲得ポイントは 1分あたりの値 × minutes とする */
+export interface SpeedupSize {
+  readonly key: string
+  readonly label: string
+  readonly minutes: number
+}
+
+export const SPEEDUP_SIZES: readonly SpeedupSize[] = [
+  { key: '1m', label: '1分', minutes: 1 },
+  { key: '5m', label: '5分', minutes: 5 },
+  { key: '1h', label: '1時間', minutes: 60 },
+  { key: '3h', label: '3時間', minutes: 180 },
+  { key: '8h', label: '8時間', minutes: 480 },
+]
+
+/**
+ * 曜日ごとの加速グループ。
+ * 編集できるのは 1分あたりの値だけで、他のサイズはそこから計算する。
+ */
+export interface SpeedupGroup {
+  /** 「建造」「科学研究」「建造・科学研究・訓練」など。金曜は3種を1つにまとめている */
+  readonly name: string
+  /** 1分あたりの獲得ポイント（初期値） */
+  readonly perMinute: number
+}
+
+/**
+ * 加速アイテムの行動名。例: 「残り時間1時間短縮」。
+ * 1曜日につき加速グループは1つだけなので、種類名（建造・科学研究…）は付けない。
+ * どの時間の短縮かは編集パネルのグループ見出しに出る。
+ */
+export const speedupLabel = (size: SpeedupSize): string => `残り時間${size.label}短縮`
+
 export interface Day {
   readonly key: DayKey
   /** タブに出す1文字（月・火…） */
   readonly label: string
   readonly name: string
   readonly items: readonly DayItem[]
+  /** 加速アイテムがある曜日のみ */
+  readonly speedup?: SpeedupGroup
+}
+
+/** 加速グループを全サイズ展開した、その曜日の全アイテム */
+export function expandDayItems(day: Day): DayItem[] {
+  const speedup = day.speedup
+  if (!speedup) return [...day.items]
+  return [
+    ...SPEEDUP_SIZES.map((size) => ({
+      label: speedupLabel(size),
+      value: speedup.perMinute * size.minutes,
+    })),
+    ...day.items,
+  ]
 }
 
 /**
@@ -41,17 +89,15 @@ export const DAYS: readonly Day[] = [
     key: 'tue',
     label: '火',
     name: '火曜日',
-    items: [
-      { label: '建造の残り時間1分短縮', value: 150 },
-      { label: '生存者募集1回', value: 4500 },
-    ],
+    speedup: { name: '建造', perMinute: 150 },
+    items: [{ label: '生存者募集1回', value: 4500 }],
   },
   {
     key: 'wed',
     label: '水',
     name: '水曜日',
+    speedup: { name: '科学研究', perMinute: 150 },
     items: [
-      { label: '科学研究の残り時間1分短縮', value: 150 },
       { label: 'Lv1ドローン部品宝箱開封', value: 2750 },
       { label: 'Lv2ドローン部品宝箱開封', value: 8250 },
       { label: 'Lv3ドローン部品宝箱開封', value: 25000 },
@@ -77,10 +123,9 @@ export const DAYS: readonly Day[] = [
     key: 'fri',
     label: '金',
     name: '金曜日',
+    // 建造・科学研究・訓練は3種とも同じ値なので、ソルバーの同値まとめに合わせて1グループにする
+    speedup: { name: '建造・科学研究・訓練', perMinute: 150 },
     items: [
-      { label: '建造の残り時間1分短縮', value: 150 },
-      { label: '科学研究の残り時間1分短縮', value: 150 },
-      { label: '訓練の残り時間1分短縮', value: 150 },
       { label: 'Lv1兵士を1体訓練', value: 56 },
       { label: 'Lv2兵士を1体訓練', value: 84 },
       { label: 'Lv3兵士を1体訓練', value: 112 },

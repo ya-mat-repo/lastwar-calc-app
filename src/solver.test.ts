@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { DAYS, TARGET } from './data'
+import { DAYS, TARGET, expandDayItems } from './data'
+import type { Day } from './data'
 import { prepareDay, solveDay } from './solver'
 import type { SolvedPattern } from './solver'
 
@@ -9,6 +10,9 @@ const prep = (values: readonly number[]) =>
     name: 'テスト',
     items: values.map((v, i) => ({ label: `V${i}`, value: v })),
   })
+
+/** 実データの曜日を、加速グループを全サイズ展開したうえで前処理する */
+const prepDay = (day: Day) => prepareDay({ ...day, items: expandDayItems(day) })
 
 /** パターンを比較しやすい素朴な形に落とす */
 const shape = (p: SolvedPattern) => ({
@@ -317,7 +321,7 @@ describe('solveDay: 並び順の契約', () => {
     })
 
   it('優先指定なしは 種類数 → 合計回数 の昇順', () => {
-    for (const day of DAYS.map(prepareDay)) {
+    for (const day of DAYS.map(prepDay)) {
       const r = solveDay(day, 6_850_000, TARGET)
       expect(ordered(r.patterns), day.name).toBe(true)
       expect(r.patterns.every((p) => p.score === 0)).toBe(true)
@@ -325,7 +329,7 @@ describe('solveDay: 並び順の契約', () => {
   })
 
   it('優先指定ありは 優先スコア降順 → 種類数 → 合計回数', () => {
-    for (const day of DAYS.map(prepareDay)) {
+    for (const day of DAYS.map(prepDay)) {
       const values = day.options.map((o) => o.value)
       const priority = values.slice(0, 3)
       const r = solveDay(day, 6_850_000, TARGET, priority)
@@ -343,7 +347,7 @@ describe('solveDay: 並び順の契約', () => {
   })
 
   it('優先指定は絞り込みではなく並び替え（件数が変わらない）', () => {
-    for (const day of DAYS.map(prepareDay)) {
+    for (const day of DAYS.map(prepDay)) {
       const values = day.options.map((o) => o.value)
       const plain = solveDay(day, 6_850_000, TARGET)
       for (const priority of [[values[0]], values.slice(0, 2), values.slice(-3)]) {
@@ -354,7 +358,7 @@ describe('solveDay: 並び順の契約', () => {
   })
 
   it('優先アイテムを含むパターンが必ず先頭に来る', () => {
-    const day = prepareDay(DAYS[0])
+    const day = prepDay(DAYS[0])
     const target = 2500 // SR英雄かけら1枚消費
     expect(day.options.some((o) => o.value === target)).toBe(true)
     const r = solveDay(day, 6_850_000, TARGET, [target])
@@ -362,7 +366,7 @@ describe('solveDay: 並び順の契約', () => {
   })
 
   it('存在しない値を優先指定しても無視される', () => {
-    const day = prepareDay(DAYS[0])
+    const day = prepDay(DAYS[0])
     const a = solveDay(day, 6_850_000, TARGET, [99999])
     const b = solveDay(day, 6_850_000, TARGET)
     expect(a.patterns.map(shape)).toEqual(b.patterns.map(shape))
@@ -373,7 +377,7 @@ describe('solveDay: 実データ（月〜金）の不変条件', () => {
   const currents = [0, 12_345, 3_000_000, 6_850_000, 7_000_000, 7_199_000, 7_199_850, 7_199_999]
 
   for (const base of DAYS) {
-    const day = prepareDay(base)
+    const day = prepDay(base)
     it(`${day.name}: どの現在値でも結果が仕様を満たす`, () => {
       for (const current of currents) {
         const r = solveDay(day, current, TARGET)
@@ -399,19 +403,19 @@ describe('solveDay: 実データ（月〜金）の不変条件', () => {
   }
 
   it('月曜 6,850,000 の最良手は UR英雄かけら×14', () => {
-    const r = solveDay(prepareDay(DAYS[0]), 6_850_000, TARGET)
+    const r = solveDay(prepDay(DAYS[0]), 6_850_000, TARGET)
     expect(r.status).toBe('exact')
     expect(shape(r.patterns[0])).toMatchObject({ values: [25000], counts: [14], kinds: 1 })
   })
 
   it('火曜 7,199,850 は 建造1分短縮×1 でぴったり', () => {
-    const r = solveDay(prepareDay(DAYS[1]), 7_199_850, TARGET)
+    const r = solveDay(prepDay(DAYS[1]), 7_199_850, TARGET)
     expect(r.status).toBe('exact')
     expect(shape(r.patterns[0])).toMatchObject({ values: [150], counts: [1] })
   })
 
   it('月曜 7,199,999 はぴったり作れず、最小超過は SR英雄かけら×1', () => {
-    const r = solveDay(prepareDay(DAYS[0]), 7_199_999, TARGET)
+    const r = solveDay(prepDay(DAYS[0]), 7_199_999, TARGET)
     expect(r.status).toBe('over-shoot')
     expect(r.patterns[0].reached).toBe(7_199_999 + 2500)
   })
@@ -452,7 +456,7 @@ describe('solveDay: 不変条件 §6-12（選択肢があれば必ず解が返�
   // 不足額が 1 単位未満になり、以前は scaledDiff が 0 に丸まって none を返していた。
   it('現在値に端数があっても解が返る（不足額が1単位未満のケース）', () => {
     for (const base of DAYS) {
-      const day = prepareDay(base)
+      const day = prepDay(base)
       const minValue = Math.min(...day.options.map((o) => o.value))
       for (const current of [
         TARGET - 0.4,
@@ -475,7 +479,7 @@ describe('solveDay: 不変条件 §6-12（選択肢があれば必ず解が返�
 
   it('端数の現在値でも優先指定の有無で件数が変わらない（§6-10）', () => {
     for (const base of DAYS) {
-      const day = prepareDay(base)
+      const day = prepDay(base)
       const current = TARGET - 0.4
       const plain = solveDay(day, current, TARGET)
       const withPriority = solveDay(
@@ -512,7 +516,7 @@ describe('solveDay: 不変条件 §6-12（選択肢があれば必ず解が返�
   // 優先指定ありでも同じ不変条件が保たれることを確認する
   it('優先指定があっても §6 の不変条件が保たれる', () => {
     for (const base of DAYS) {
-      const day = prepareDay(base)
+      const day = prepDay(base)
       const values = day.options.map((o) => o.value)
       const priorities = [
         [values[0]],
@@ -570,14 +574,14 @@ describe('solveDay: 不変条件 §6-12（選択肢があれば必ず解が返�
 // レビューで見つかった具体的な不具合を、そのままの値で固定しておく
 describe('solveDay: 回帰（レビュー指摘の修正）', () => {
   it('#1 不足額が丸めて0になっても none にならない（火曜 7,199,999.6）', () => {
-    const r = solveDay(prepareDay(DAYS[1]), 7_199_999.6, TARGET)
+    const r = solveDay(prepDay(DAYS[1]), 7_199_999.6, TARGET)
     expect(r.status).toBe('over-shoot')
     expect(shape(r.patterns[0])).toMatchObject({ values: [150], counts: [1] })
     expect(r.patterns[0].reached).toBeCloseTo(7_200_149.6, 6)
   })
 
   it('#1 月曜（scaleFactor=10）でも同様（7,199,999.99）', () => {
-    const r = solveDay(prepareDay(DAYS[0]), 7_199_999.99, TARGET)
+    const r = solveDay(prepDay(DAYS[0]), 7_199_999.99, TARGET)
     expect(r.status).toBe('over-shoot')
     expect(shape(r.patterns[0])).toMatchObject({ values: [2500], counts: [1] })
   })
@@ -586,7 +590,7 @@ describe('solveDay: 回帰（レビュー指摘の修正）', () => {
     // 不足 2500.25。2500 に丸めると「2500×1 でぴったり」に見えてしまうが、
     // 実際の到達値は 7,199,999.75 で目標を下回る。
     const current = 7_197_499.75
-    const r = solveDay(prepareDay(DAYS[3]), current, TARGET)
+    const r = solveDay(prepDay(DAYS[3]), current, TARGET)
     expect(r.status).toBe('over-shoot')
     expect(shape(r.patterns[0])).toMatchObject({ values: [4200], counts: [1] })
     expect(r.patterns[0].reached).toBeCloseTo(7_201_699.75, 6)
@@ -602,7 +606,7 @@ describe('solveDay: 回帰（レビュー指摘の修正）', () => {
 
   it('#4 丸め誤差レベルのズレは今までどおり ぴったり と判定する', () => {
     // 7,200,000 - 2812.5 は浮動小数の再計算で微小な誤差が出るが exact のまま
-    const r = solveDay(prepareDay(DAYS[0]), TARGET - 2812.5, TARGET)
+    const r = solveDay(prepDay(DAYS[0]), TARGET - 2812.5, TARGET)
     expect(r.status).toBe('exact')
     expect(r.patterns[0].reached).toBe(TARGET)
   })
@@ -650,7 +654,7 @@ describe('solveDay: 回帰（レビュー指摘の修正）', () => {
 })
 
 describe('solveDay: 境界と異常系', () => {
-  const day = prepareDay(DAYS[0])
+  const day = prepDay(DAYS[0])
 
   it('現在値が目標ちょうどなら reached', () => {
     expect(solveDay(day, TARGET, TARGET)).toMatchObject({ status: 'reached', patterns: [] })
@@ -710,7 +714,7 @@ describe('solveDay: 境界と異常系', () => {
   })
 
   it('選択肢が多い曜日でも実用的な速度で返る', () => {
-    const fri = prepareDay(DAYS[4])
+    const fri = prepDay(DAYS[4])
     const priority = fri.options.slice(0, 3).map((o) => o.value)
     const t0 = performance.now()
     solveDay(fri, 6_850_000, TARGET, priority)
