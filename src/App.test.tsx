@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import App from './App'
 import { TARGET } from './data'
+import { MAX_PRIORITY, RANK_MARK } from './state'
 
 afterEach(cleanup)
 beforeEach(() => localStorage.clear())
@@ -32,8 +33,21 @@ const openPriority = (container: HTMLElement): HTMLElement => {
 const chip = (panel: HTMLElement, name: RegExp): HTMLElement =>
   within(panel).getByRole('button', { name })
 
+/**
+ * パネル内で付いている順位の印。
+ * チップは獲得値パネルと同じ並びなので、タップ順とDOM順は一致しない。
+ * 「どの順位が埋まっているか」だけを見たいので昇順に揃える。
+ */
 const ranksIn = (panel: HTMLElement): string[] =>
-  [...panel.querySelectorAll('.chip__rank')].map((e) => e.textContent ?? '')
+  [...panel.querySelectorAll('.chip__rank')].map((e) => e.textContent ?? '').sort()
+
+/** 指定したチップに付いている順位の印（未選択なら空文字） */
+const rankOf = (panel: HTMLElement, name: RegExp): string =>
+  chip(panel, name).querySelector('.chip__rank')?.textContent ?? ''
+
+/** チップの並び（ラベルの配列） */
+const chipLabels = (panel: HTMLElement): string[] =>
+  [...panel.querySelectorAll('.chip__label')].map((e) => e.textContent ?? '')
 
 describe('App: 基本の流れ', () => {
   it('初期表示では目標値だけ出ていて、結果は出ない', () => {
@@ -51,10 +65,10 @@ describe('App: 基本の流れ', () => {
       .toBeTruthy()
     await waitFor(() => expect(cards(container)).toHaveLength(20))
 
-    // 最良手は UR英雄かけら×14（solver.test.ts と同じ期待値）
+    // 最良手は SSR英雄かけら40枚消費×1（solver.test.ts と同じ期待値）
     const first = cards(container)[0]
-    expect(within(first).getByText('UR英雄かけら1枚消費')).toBeTruthy()
-    expect(within(first).getByText('×14')).toBeTruthy()
+    expect(within(first).getByText('SSR英雄かけら40枚消費')).toBeTruthy()
+    expect(within(first).getByText('×1')).toBeTruthy()
     expect(within(first).getByText(`到達 ${TARGET.toLocaleString('ja-JP')}`)).toBeTruthy()
   })
 
@@ -114,7 +128,7 @@ describe('App: 獲得値の編集', () => {
     expect(reset).toHaveProperty('disabled', true)
     expect(screen.queryByText('編集済み')).toBeNull()
 
-    fireEvent.change(screen.getByLabelText('UR英雄かけら1枚消費の獲得値'), {
+    fireEvent.change(screen.getByLabelText('チップ宝箱(UR)開封の獲得値'), {
       target: { value: '30000' },
     })
 
@@ -123,7 +137,7 @@ describe('App: 獲得値の編集', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /初期値に戻す/ }))
     await waitFor(() => expect(screen.queryByText('編集済み')).toBeNull())
-    expect(screen.getByLabelText('UR英雄かけら1枚消費の獲得値')).toHaveProperty('value', '25000')
+    expect(screen.getByLabelText('チップ宝箱(UR)開封の獲得値')).toHaveProperty('value', '281250')
   })
 
   it('編集した値が計算に反映される', async () => {
@@ -155,19 +169,19 @@ describe('App: 獲得値の編集', () => {
     typeCurrent('6850000')
     await waitFor(() => expect(cards(container).length).toBeGreaterThan(0))
 
-    fireEvent.change(screen.getByLabelText('UR英雄かけら1枚消費の獲得値'), { target: { value: '' } })
+    fireEvent.change(screen.getByLabelText('チップ宝箱(UR)開封の獲得値'), { target: { value: '' } })
 
-    // 25000 が消えるので UR英雄かけら×14 の解は出せなくなる
     await waitFor(() => {
-      expect(within(cards(container)[0]).queryByText('UR英雄かけら1枚消費')).toBeNull()
+      const chips = [...container.querySelectorAll('.card .part__label')]
+      expect(chips.some((e) => e.textContent?.includes('チップ宝箱(UR)開封'))).toBe(false)
     })
   })
 
   it('行を削除できる', async () => {
     render(<App />)
-    expect(screen.getByLabelText('SR英雄かけら1枚消費の獲得値')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'SR英雄かけら1枚消費を削除' }))
-    await waitFor(() => expect(screen.queryByLabelText('SR英雄かけら1枚消費の獲得値')).toBeNull())
+    expect(screen.getByLabelText('チップ宝箱(R)開封の獲得値')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'チップ宝箱(R)開封を削除' }))
+    await waitFor(() => expect(screen.queryByLabelText('チップ宝箱(R)開封の獲得値')).toBeNull())
   })
 })
 
@@ -216,20 +230,20 @@ describe('App: グループ（加速・結束）', () => {
     expect(screen.getByLabelText('兵装コアの基準値（1個あたり）')).toHaveProperty('value', '6250')
 
     expect(sizeRows(container, 'material')).toEqual([
-      ['10k', '25,000'],
-      ['20k', '50,000'],
-      ['30k', '75,000'],
-      ['40k', '100,000'],
-      ['50k', '125,000'],
+      ['10k個', '25,000'],
+      ['20k個', '50,000'],
+      ['30k個', '75,000'],
+      ['40k個', '100,000'],
+      ['50k個', '125,000'],
     ])
     expect(sizeRows(container, 'core')).toEqual([
-      ['10', '62,500'],
-      ['20', '125,000'],
-      ['30', '187,500'],
-      ['40', '250,000'],
-      ['50', '312,500'],
-      ['60', '375,000'],
-      ['70', '437,500'],
+      ['10個', '62,500'],
+      ['20個', '125,000'],
+      ['30個', '187,500'],
+      ['40個', '250,000'],
+      ['50個', '312,500'],
+      ['60個', '375,000'],
+      ['70個', '437,500'],
     ])
   })
 
@@ -272,11 +286,11 @@ describe('App: グループ（加速・結束）', () => {
       ]),
     )
     expect(sizeRows(container, 'material')).toEqual([
-      ['10k', '50,000'],
-      ['20k', '100,000'],
-      ['30k', '150,000'],
-      ['40k', '200,000'],
-      ['50k', '250,000'],
+      ['10k個', '50,000'],
+      ['20k個', '100,000'],
+      ['30k個', '150,000'],
+      ['40k個', '200,000'],
+      ['50k個', '250,000'],
     ])
   })
 
@@ -370,12 +384,12 @@ describe('App: グループ（加速・結束）', () => {
       expect(within(cards(container)[0]).queryByText('兵装コア10個使う')).toBeTruthy()
     })
 
-    fireEvent.click(checkbox(container, 'core', '10'))
+    fireEvent.click(checkbox(container, 'core', '10個'))
 
     await waitFor(() => {
       expect(within(cards(container)[0]).queryByText('兵装コア10個使う')).toBeNull()
     })
-    expect(checkbox(container, 'core', '10').checked).toBe(false)
+    expect(checkbox(container, 'core', '10個').checked).toBe(false)
   })
 
   it('チェックを外すと件数表示が減り、編集済みになる', async () => {
@@ -386,7 +400,7 @@ describe('App: グループ（加速・結束）', () => {
     fireEvent.click(checkbox(container, 'speedup', '3時間'))
     expect(await screen.findByText('17件')).toBeTruthy()
 
-    fireEvent.click(checkbox(container, 'core', '70'))
+    fireEvent.click(checkbox(container, 'core', '70個'))
     expect(await screen.findByText('16件')).toBeTruthy()
     expect(screen.getByText('編集済み')).toBeTruthy()
   })
@@ -441,17 +455,32 @@ describe('App: グループ（加速・結束）', () => {
   it('「初期値に戻す」でチェックも全部戻る', async () => {
     const { container } = openTue()
     fireEvent.click(checkbox(container, 'speedup', '3時間'))
-    fireEvent.click(checkbox(container, 'core', '70'))
-    await waitFor(() => expect(checkbox(container, 'core', '70').checked).toBe(false))
+    fireEvent.click(checkbox(container, 'core', '70個'))
+    await waitFor(() => expect(checkbox(container, 'core', '70個').checked).toBe(false))
 
     fireEvent.click(screen.getByRole('button', { name: /初期値に戻す/ }))
     await waitFor(() => expect(checkbox(container, 'speedup', '3時間').checked).toBe(true))
-    expect(checkbox(container, 'core', '70').checked).toBe(true)
+    expect(checkbox(container, 'core', '70個').checked).toBe(true)
   })
 
-  it('グループのない月曜には枠を出さない', () => {
+  it('月曜・木曜にはかけらの結束グループが並ぶ', () => {
     const { container } = render(<App />)
-    expect(container.querySelector('.group')).toBeNull()
+    expect(container.querySelectorAll('.group')).toHaveLength(3)
+    expect(screen.getByText('UR英雄かけらの結束')).toBeTruthy()
+    // かけらも結束単位でしか使わないので、1枚ぶんの行は出ない
+    expect(screen.getAllByText('使う結束単位（1枚ずつでは使えません）')).toHaveLength(3)
+    expect(sizeRows(container, 'ur')).toEqual([
+      ['10枚', '250,000'],
+      ['20枚', '500,000'],
+      ['30枚', '750,000'],
+      ['40枚', '1,000,000'],
+      ['50枚', '1,250,000'],
+    ])
+
+    fireEvent.click(screen.getByRole('tab', { name: '木曜日' }))
+    expect(container.querySelectorAll('.group')).toHaveLength(5)
+    expect(screen.getByText('専用武装のかけらの結束')).toBeTruthy()
+    expect(screen.getByText('覚醒かけらの結束')).toBeTruthy()
   })
 
   it('金曜は建造・科学研究・訓練が1グループにまとまっている', () => {
@@ -469,10 +498,12 @@ describe('App: 優先して使うアイテム', () => {
     await waitFor(() => expect(cards(container).length).toBeGreaterThan(0))
 
     const panel = openPriority(container)
-    fireEvent.click(chip(panel, /UR英雄かけら/))
+    fireEvent.click(chip(panel, /チップ宝箱\(UR\)/))
     await waitFor(() => expect(ranksIn(panel)).toEqual(['①']))
     fireEvent.click(chip(panel, /20APを消費/))
     await waitFor(() => expect(ranksIn(panel)).toEqual(['①', '②']))
+    expect(rankOf(panel, /チップ宝箱\(UR\)/)).toBe('①')
+    expect(rankOf(panel, /20APを消費/)).toBe('②')
 
     // 上位のパターンは優先アイテムを含み、カードにも順位の印が付く
     await waitFor(() => {
@@ -486,47 +517,89 @@ describe('App: 優先して使うアイテム', () => {
     const panel = openPriority(container)
     fireEvent.click(chip(panel, /チップ宝箱\(UR\)/))
     fireEvent.click(chip(panel, /チップ宝箱\(SSR\)/))
-    fireEvent.click(chip(panel, /UR英雄かけら/))
+    fireEvent.click(chip(panel, /10APを消費/))
     await waitFor(() => expect(ranksIn(panel)).toEqual(['①', '②', '③']))
 
     fireEvent.click(chip(panel, /チップ宝箱\(SSR\)/)) // ② を外す
     await waitFor(() => expect(ranksIn(panel)).toEqual(['①', '②']))
-    expect(chip(panel, /UR英雄かけら/).getAttribute('aria-pressed')).toBe('true')
+    // ③ だった 10AP が ② に繰り上がる
+    expect(rankOf(panel, /チップ宝箱\(UR\)/)).toBe('①')
+    expect(rankOf(panel, /10APを消費/)).toBe('②')
     expect(chip(panel, /チップ宝箱\(SSR\)/).getAttribute('aria-pressed')).toBe('false')
   })
 
-  it('上限3件を超えては選べない', async () => {
+  it(`上限${MAX_PRIORITY}件を超えては選べない`, async () => {
     const { container } = render(<App />)
     const panel = openPriority(container)
-    for (const name of [/チップ宝箱\(UR\)/, /チップ宝箱\(SSR\)/, /UR英雄かけら/]) {
+    for (const name of [
+      /チップ宝箱\(UR\)/,
+      /チップ宝箱\(SSR\)/,
+      /チップ宝箱\(SR\)/,
+      /チップ宝箱\(R\)/,
+      /10APを消費/,
+    ]) {
       fireEvent.click(chip(panel, name))
     }
-    await waitFor(() => expect(ranksIn(panel)).toEqual(['①', '②', '③']))
+    await waitFor(() => expect(ranksIn(panel)).toEqual(['①', '②', '③', '④', '⑤']))
 
     fireEvent.click(chip(panel, /20APを消費/))
-    await waitFor(() => expect(ranksIn(panel)).toHaveLength(3))
+    await waitFor(() => expect(ranksIn(panel)).toHaveLength(MAX_PRIORITY))
     expect(chip(panel, /20APを消費/).getAttribute('aria-pressed')).toBe('false')
   })
 
   // レビュー指摘 #2 の回帰テスト。
   // 保存済みの優先指定を剪定せずに上限を数えていたため、
-  // 「画面は2件なのに3件目が選べない（タップしても無反応）」状態になっていた。
-  it('選択中のアイテムを削除したら、その枠が空いて別のものを選べる', async () => {
+  // 「画面は4件なのに5件目が選べない（タップしても無反応）」状態になっていた。
+  // 上限まで埋めてから1件消さないと再現しないので、必ず MAX_PRIORITY 件選ぶこと。
+  it('上限まで選んだあとその1つを削除したら、空いた枠に別のものを選べる', async () => {
     const { container } = render(<App />)
     const panel = openPriority(container)
-    for (const name of [/チップ宝箱\(UR\)/, /チップ宝箱\(SSR\)/, /UR英雄かけら/]) {
+    for (const name of [
+      /チップ宝箱\(UR\)/,
+      /チップ宝箱\(SSR\)/,
+      /チップ宝箱\(SR\)/,
+      /チップ宝箱\(R\)/,
+      /10APを消費/,
+    ]) {
       fireEvent.click(chip(panel, name))
     }
-    await waitFor(() => expect(ranksIn(panel)).toEqual(['①', '②', '③']))
+    await waitFor(() => expect(ranksIn(panel)).toHaveLength(MAX_PRIORITY))
 
-    // ③ に指定した UR英雄かけら の行を削除する
-    fireEvent.click(screen.getByRole('button', { name: 'UR英雄かけら1枚消費を削除' }))
-    await waitFor(() => expect(ranksIn(panel)).toEqual(['①', '②']))
+    // ⑤ に指定した 10AP の行を削除する
+    fireEvent.click(screen.getByRole('button', { name: /10APを消費.*を削除/ }))
+    await waitFor(() => expect(ranksIn(panel)).toHaveLength(MAX_PRIORITY - 1))
 
     // 空いた枠に別のアイテムを入れられる
     fireEvent.click(chip(panel, /20APを消費/))
-    await waitFor(() => expect(ranksIn(panel)).toEqual(['①', '②', '③']))
-    expect(chip(panel, /20APを消費/).getAttribute('aria-pressed')).toBe('true')
+    await waitFor(() => expect(ranksIn(panel)).toHaveLength(MAX_PRIORITY))
+    expect(rankOf(panel, /20APを消費/)).toBe(RANK_MARK[MAX_PRIORITY - 1])
+  })
+
+  // 値の降順で並べると編集パネルと食い違って探しにくいので、パネルと同じ並びにする
+  it('チップは獲得値パネルと同じ並びになる', () => {
+    const { container } = render(<App />)
+    fireEvent.click(screen.getByRole('tab', { name: '火曜日' }))
+    const panel = openPriority(container)
+
+    expect(chipLabels(panel)).toEqual([
+      '残り時間1分短縮',
+      '残り時間5分短縮',
+      '残り時間1時間短縮',
+      '残り時間3時間短縮',
+      '残り時間8時間短縮',
+      '兵装素材10k個使う',
+      '兵装素材20k個使う',
+      '兵装素材30k個使う',
+      '兵装素材40k個使う',
+      '兵装素材50k個使う / 兵装コア20個使う',
+      '兵装コア10個使う',
+      '兵装コア30個使う',
+      '兵装コア40個使う',
+      '兵装コア50個使う',
+      '兵装コア60個使う',
+      '兵装コア70個使う',
+      '生存者募集1回',
+    ])
   })
 
   it('「優先指定をクリア」で一括解除できる', async () => {

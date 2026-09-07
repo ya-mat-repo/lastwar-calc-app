@@ -75,6 +75,13 @@ export default function App() {
   )
   const deferredPriority = useDeferredValue(priority)
 
+  // 優先チップは獲得値パネルと同じ並びにする。
+  // options は探索の都合で値の降順なので、そのまま出すと編集欄と並びが食い違って探しにくい。
+  const chipOptions = useMemo(
+    () => [...prep.options].sort((a, b) => a.order - b.order),
+    [prep],
+  )
+
   const result = useMemo(
     () => (deferredCurrent === null ? null : solveDay(prep, deferredCurrent, TARGET, deferredPriority)),
     [prep, deferredCurrent, deferredPriority],
@@ -291,11 +298,12 @@ export default function App() {
           {pickingPriority && (
             <div className="priority__body">
               <p className="editor__hint">
-                タップした順に①②③が付き、優先アイテムを多く含むパターンが上位に並びます
-                （①ほど重視）。優先外のパターンもその下に表示されます。
+                タップした順に{RANK_MARK.join('')}が付き（最大{MAX_PRIORITY}件）、
+                優先アイテムを多く含むパターンが上位に並びます（{RANK_MARK[0]}ほど重視）。
+                優先外のパターンもその下に表示されます。
               </p>
               <div className="chips">
-                {prep.options.map((o) => {
+                {chipOptions.map((o) => {
                   const rank = priority.indexOf(o.value)
                   const full = rank < 0 && priority.length >= MAX_PRIORITY
                   return (

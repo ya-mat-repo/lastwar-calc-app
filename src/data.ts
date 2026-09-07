@@ -15,12 +15,18 @@ export interface DayItem {
  */
 export type GroupKind = 'speedup' | 'bundle'
 
-/** グループ内の 1 サイズ。獲得ポイントは 基準値 × multiplier とする */
+/**
+ * グループ内の 1 サイズ。獲得ポイントは 基準値 × multiplier とする。
+ * label は助数詞まで含んだ表示名（`10k個` `10枚` `1時間`）で、行動名にもそのまま使う。
+ */
 export interface GroupSize {
   readonly key: string
   readonly label: string
   readonly multiplier: number
 }
+
+const sizes = (rows: readonly (readonly [string, string, number])[]): readonly GroupSize[] =>
+  rows.map(([key, label, multiplier]) => ({ key, label, multiplier }))
 
 export const SPEEDUP_SIZES: readonly GroupSize[] = [
   { key: '1m', label: '1分', multiplier: 1 },
@@ -30,50 +36,67 @@ export const SPEEDUP_SIZES: readonly GroupSize[] = [
   { key: '8h', label: '8時間', multiplier: 480 },
 ]
 
-/** 結束単位。ラベルがそのままキーになり、倍率は「何個ぶんか」 */
-const bundleSizes = (sizes: readonly (readonly [string, number])[]): readonly GroupSize[] =>
-  sizes.map(([label, multiplier]) => ({ key: label, label, multiplier }))
-
 /** 兵装素材の結束単位（1個 = 2.5 なので 10k で 25,000） */
-export const MATERIAL_BUNDLES = bundleSizes([
-  ['10k', 10_000],
-  ['20k', 20_000],
-  ['30k', 30_000],
-  ['40k', 40_000],
-  ['50k', 50_000],
+export const MATERIAL_BUNDLES = sizes([
+  ['10k', '10k個', 10_000],
+  ['20k', '20k個', 20_000],
+  ['30k', '30k個', 30_000],
+  ['40k', '40k個', 40_000],
+  ['50k', '50k個', 50_000],
 ])
 
 /** 兵装コアの結束単位 */
-export const CORE_BUNDLES = bundleSizes([
-  ['10', 10],
-  ['20', 20],
-  ['30', 30],
-  ['40', 40],
-  ['50', 50],
-  ['60', 60],
-  ['70', 70],
+export const CORE_BUNDLES = sizes([
+  ['10', '10個', 10],
+  ['20', '20個', 20],
+  ['30', '30個', 30],
+  ['40', '40個', 40],
+  ['50', '50個', 50],
+  ['60', '60個', 60],
+  ['70', '70個', 70],
+])
+
+/** かけらの結束単位。兵装素材・兵装コアと同じく、1枚ずつでは使わないので ×1 は持たない */
+export const SHARD_BUNDLES = sizes([
+  ['10', '10枚', 10],
+  ['20', '20枚', 20],
+  ['30', '30枚', 30],
+  ['40', '40枚', 40],
+  ['50', '50枚', 50],
 ])
 
 /**
  * 曜日ごとのグループ。
  * 編集できるのは基準値（1分あたり / 1個あたり）だけで、各サイズはそこから計算する。
  */
-export interface ItemGroup {
+interface GroupBase {
   /** 曜日内で一意なキー */
   readonly key: string
-  readonly kind: GroupKind
   /** 「建造」「兵装素材」など。金曜の加速は3種を1つにまとめている */
   readonly name: string
-  /** 基準の単位（「1分」「1個」）。編集欄の見出しに出る */
+  /** 基準の単位（「1分」「1個」「1枚」）。編集欄の見出しに出る */
   readonly unitLabel: string
   /** 基準 1 単位あたりの獲得ポイント（初期値） */
   readonly base: number
   /**
    * 計算に使えるサイズ。
-   * 結束はここに ×1 を入れない（1個ずつでは使えず、結束単位でしか使えないため）。
+   * 結束はここに ×1 を入れない（結束単位でしか使わないため）。
+   * 基準値は各サイズの値を出すための係数でしかなく、それ自体は選択肢にならない。
    */
   readonly sizes: readonly GroupSize[]
 }
+
+export interface SpeedupGroup extends GroupBase {
+  readonly kind: 'speedup'
+}
+
+export interface BundleGroup extends GroupBase {
+  readonly kind: 'bundle'
+  /** 行動名の末尾に付ける動詞（「使う」「消費」） */
+  readonly action: string
+}
+
+export type ItemGroup = SpeedupGroup | BundleGroup
 
 /** 編集パネルの見出しに付ける種別バッジ */
 export const groupTag = (group: ItemGroup): string =>
@@ -83,20 +106,27 @@ export const groupTag = (group: ItemGroup): string =>
 export const groupHeading = (group: ItemGroup): string =>
   group.kind === 'speedup' ? `${group.name}の残り時間短縮` : `${group.name}の結束`
 
-/** チェックボックス一覧の見出し */
-export const groupListTitle = (group: ItemGroup): string =>
-  group.kind === 'speedup' ? '持っている加速アイテム' : '使う結束単位（1個ずつでは使えません）'
+/**
+ * チェックボックス一覧の見出し。
+ * 結束が ×1 を持つ場合（今は無い）だけ、単体でも使える旨を落とす。
+ */
+export const groupListTitle = (group: ItemGroup): string => {
+  if (group.kind === 'speedup') return '持っている加速アイテム'
+  const single = group.sizes.some((s) => s.multiplier === 1)
+  return single ? '使う結束単位' : `使う結束単位（${group.unitLabel}ずつでは使えません）`
+}
 
 /**
  * グループから展開したアイテムの行動名。
  * 加速は「残り時間1時間短縮」。1曜日につき加速グループは1つだけなので、
  * 種類名（建造・科学研究…）は付けず、編集パネルの見出しで示す。
  * 結束は同じ曜日に複数グループが並ぶので「兵装素材10k個使う」と種類名を付ける。
+ * サイズ名に助数詞（個・枚）が入っているので、末尾の動詞だけをグループごとに持つ。
  */
 export const groupItemLabel = (group: ItemGroup, size: GroupSize): string =>
   group.kind === 'speedup'
     ? `残り時間${size.label}短縮`
-    : `${group.name}${size.label}個使う`
+    : `${group.name}${size.label}${group.action}`
 
 export interface Day {
   readonly key: DayKey
@@ -120,6 +150,20 @@ export function expandDayItems(day: Day): DayItem[] {
 }
 
 /**
+ * かけらのグループ。月曜・木曜に同じ形で並ぶので、名前と1枚あたりの値だけで作る。
+ * 行動名は「UR英雄かけら10枚消費」のように結束単位ぶんになる。
+ */
+const shardGroup = (key: string, name: string, base: number): BundleGroup => ({
+  key,
+  kind: 'bundle',
+  name,
+  unitLabel: '1枚',
+  base,
+  action: '消費',
+  sizes: SHARD_BUNDLES,
+})
+
+/**
  * 曜日ごとの獲得値。仕様書「アプリ仕様書.md」の値をそのまま転記している。
  * 同じ値を持つ行動は prepareDay() が 1 つの選択肢にまとめる。
  */
@@ -128,6 +172,11 @@ export const DAYS: readonly Day[] = [
     key: 'mon',
     label: '月',
     name: '月曜日',
+    groups: [
+      shardGroup('ur', 'UR英雄かけら', 25000),
+      shardGroup('ssr', 'SSR英雄かけら', 8750),
+      shardGroup('sr', 'SR英雄かけら', 2500),
+    ],
     items: [
       { label: '10APを消費（野良ゾンビ倒す）', value: 3750 },
       { label: '20APを消費（終末精鋭集結）', value: 7500 },
@@ -135,9 +184,6 @@ export const DAYS: readonly Day[] = [
       { label: 'チップ宝箱(SR)開封', value: 14062.5 },
       { label: 'チップ宝箱(SSR)開封', value: 84375 },
       { label: 'チップ宝箱(UR)開封', value: 281250 },
-      { label: 'UR英雄かけら1枚消費', value: 25000 },
-      { label: 'SSR英雄かけら1枚消費', value: 8750 },
-      { label: 'SR英雄かけら1枚消費', value: 2500 },
     ],
   },
   {
@@ -159,6 +205,7 @@ export const DAYS: readonly Day[] = [
         name: '兵装素材',
         unitLabel: '1個',
         base: 2.5,
+        action: '使う',
         sizes: MATERIAL_BUNDLES,
       },
       {
@@ -167,6 +214,7 @@ export const DAYS: readonly Day[] = [
         name: '兵装コア',
         unitLabel: '1個',
         base: 6250,
+        action: '使う',
         sizes: CORE_BUNDLES,
       },
     ],
@@ -199,14 +247,14 @@ export const DAYS: readonly Day[] = [
     key: 'thu',
     label: '木',
     name: '木曜日',
-    items: [
-      { label: '英雄募集1回', value: 4200 },
-      { label: '覚醒かけら1枚消費', value: 25000 },
-      { label: '専用武装のかけら1枚消費', value: 25000 },
-      { label: 'UR英雄かけら1枚消費', value: 25000 },
-      { label: 'SSR英雄かけら1枚消費', value: 8750 },
-      { label: 'SR英雄かけら1枚消費', value: 2500 },
+    groups: [
+      shardGroup('awaken', '覚醒かけら', 25000),
+      shardGroup('weapon', '専用武装のかけら', 25000),
+      shardGroup('ur', 'UR英雄かけら', 25000),
+      shardGroup('ssr', 'SSR英雄かけら', 8750),
+      shardGroup('sr', 'SR英雄かけら', 2500),
     ],
+    items: [{ label: '英雄募集1回', value: 4200 }],
   },
   {
     key: 'fri',

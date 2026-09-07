@@ -14,6 +14,8 @@
 import type { DayItem } from './data'
 
 const MAX_RESULTS = 20
+/** 「優先して使うアイテム」に指定できる件数。重みは ①=MAX_PRIORITY … 最下位=1 */
+export const MAX_PRIORITY = 5
 const MAX_OVERSHOOT_STEPS = 5000
 const K3_ITERATION_BUDGET = 2_000_000
 
@@ -30,6 +32,12 @@ export interface Option {
   readonly value: number
   /** 同じ値を持つ行動名（複数ありうる） */
   readonly labels: readonly string[]
+  /**
+   * 入力（＝獲得値パネル）に最初に現れた順。
+   * options 自体は探索の都合で値の降順に並ぶので、
+   * 画面の並びに戻したいところ（優先チップ）はこれで並べ替える。
+   */
+  readonly order: number
   /** value を整数化した値（value * scaleFactor） */
   readonly scaled: number
   /** scaled を全体の GCD で割った、探索に使う単位 */
@@ -167,8 +175,14 @@ export function prepareDay(day: DaySource): PreparedDay {
 
   const scaleFactor = 10 ** Math.max(0, ...[...byValue.keys()].map(decimalPlaces))
 
+  // Map は挿入順を保つので、entries の並び＝獲得値パネルの並び
   const scaled = [...byValue.entries()]
-    .map(([value, labels]) => ({ value, labels, scaled: Math.round(value * scaleFactor) }))
+    .map(([value, labels], order) => ({
+      value,
+      labels,
+      order,
+      scaled: Math.round(value * scaleFactor),
+    }))
     // MAX_DECIMALS の丸めで 0 になる極小値（0.00001 など）は探索単位が 0 になり、
     // GCD も割り算も破綻するので選択肢にしない
     .filter((o) => o.scaled > 0)
@@ -274,12 +288,12 @@ function solveSubset(
 }
 
 /**
- * 「優先して使うアイテム」の重み表を作る。先頭ほど重い（①=3, ②=2, ③=1）。
+ * 「優先して使うアイテム」の重み表を作る。先頭ほど重い（①=5, ②=4, … ⑤=1）。
  * 優先スコア = パターンが含む優先アイテムの重みの合計。
  */
 function priorityWeights(priority: readonly number[]): Map<number, number> {
   const w = new Map<number, number>()
-  priority.slice(0, 3).forEach((value, i) => w.set(value, 3 - i))
+  priority.slice(0, MAX_PRIORITY).forEach((value, i) => w.set(value, MAX_PRIORITY - i))
   return w
 }
 

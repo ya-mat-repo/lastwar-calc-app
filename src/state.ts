@@ -4,11 +4,12 @@
  */
 import { DAYS, groupItemLabel } from './data'
 import type { Day, DayKey, GroupSize, ItemGroup } from './data'
-import { prepareDay } from './solver'
+import { MAX_PRIORITY, prepareDay } from './solver'
 import type { Option, PreparedDay } from './solver'
 
-export const MAX_PRIORITY = 3
-export const RANK_MARK = ['①', '②', '③'] as const
+// 上限は重み付け（solver 側）と揃える必要があるので、solver の定義をそのまま使う
+export { MAX_PRIORITY }
+export const RANK_MARK = ['①', '②', '③', '④', '⑤'] as const
 
 /** 編集中の 1 行。値は入力途中（"28" や ""）も保持したいので文字列で持つ */
 export interface EditableItem {

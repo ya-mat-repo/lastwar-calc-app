@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { DAYS, TARGET, expandDayItems } from './data'
 import type { Day } from './data'
-import { prepareDay, solveDay } from './solver'
+import { MAX_PRIORITY, prepareDay, solveDay } from './solver'
 import type { SolvedPattern } from './solver'
 
 const prep = (values: readonly number[]) =>
@@ -74,7 +74,7 @@ function allSubsets(values: readonly number[]): number[][] {
 const scoreOf = (values: readonly number[], priority: readonly number[]): number =>
   values.reduce((s, v) => {
     const r = priority.indexOf(v)
-    return s + (r < 0 ? 0 : 3 - r)
+    return s + (r < 0 ? 0 : MAX_PRIORITY - r)
   }, 0)
 
 /** D を作る全パターンを、ソルバーと同じ規則で並べた期待値 */
@@ -359,7 +359,7 @@ describe('solveDay: 並び順の契約', () => {
 
   it('優先アイテムを含むパターンが必ず先頭に来る', () => {
     const day = prepDay(DAYS[0])
-    const target = 2500 // SR英雄かけら1枚消費
+    const target = 2812.5 // チップ宝箱(R)開封（かけらが結束単位だけになり、これが月曜の最小値）
     expect(day.options.some((o) => o.value === target)).toBe(true)
     const r = solveDay(day, 6_850_000, TARGET, [target])
     expect(r.patterns[0].parts.some((x) => x.option.value === target)).toBe(true)
@@ -402,10 +402,12 @@ describe('solveDay: 実データ（月〜金）の不変条件', () => {
     })
   }
 
-  it('月曜 6,850,000 の最良手は UR英雄かけら×14', () => {
+  // かけらに結束単位が付いたので、不足 350,000 は SSR英雄かけら40枚（8,750 × 40）1回で埋まる
+  it('月曜 6,850,000 の最良手は SSR英雄かけら40枚消費×1', () => {
     const r = solveDay(prepDay(DAYS[0]), 6_850_000, TARGET)
     expect(r.status).toBe('exact')
-    expect(shape(r.patterns[0])).toMatchObject({ values: [25000], counts: [14], kinds: 1 })
+    expect(shape(r.patterns[0])).toMatchObject({ values: [350000], counts: [1], kinds: 1 })
+    expect(r.patterns[0].parts[0].option.labels).toEqual(['SSR英雄かけら40枚消費'])
   })
 
   it('火曜 7,199,850 は 建造1分短縮×1 でぴったり', () => {
@@ -414,10 +416,10 @@ describe('solveDay: 実データ（月〜金）の不変条件', () => {
     expect(shape(r.patterns[0])).toMatchObject({ values: [150], counts: [1] })
   })
 
-  it('月曜 7,199,999 はぴったり作れず、最小超過は SR英雄かけら×1', () => {
+  it('月曜 7,199,999 はぴったり作れず、最小超過は チップ宝箱(R)×1', () => {
     const r = solveDay(prepDay(DAYS[0]), 7_199_999, TARGET)
     expect(r.status).toBe('over-shoot')
-    expect(r.patterns[0].reached).toBe(7_199_999 + 2500)
+    expect(r.patterns[0].reached).toBe(7_199_999 + 2812.5)
   })
 })
 
@@ -583,7 +585,7 @@ describe('solveDay: 回帰（レビュー指摘の修正）', () => {
   it('#1 月曜（scaleFactor=10）でも同様（7,199,999.99）', () => {
     const r = solveDay(prepDay(DAYS[0]), 7_199_999.99, TARGET)
     expect(r.status).toBe('over-shoot')
-    expect(shape(r.patterns[0])).toMatchObject({ values: [2500], counts: [1] })
+    expect(shape(r.patterns[0])).toMatchObject({ values: [2812.5], counts: [1] })
   })
 
   it('#4 不足額の端数を切り捨てて目標を下回る解を返さない（木曜 7,197,499.75）', () => {
@@ -693,10 +695,10 @@ describe('solveDay: 境界と異常系', () => {
   })
 
   it('刻み（GCD）と一致するだけでは作れない不足額は超過側に回る', () => {
-    // 月曜の刻みは 312.5 だが、最小の獲得値は 2500 なので 312.5 ちょうどは作れない
+    // 月曜の刻みは 312.5 だが、最小の獲得値は 2812.5 なので 312.5 ちょうどは作れない
     const r = solveDay(day, TARGET - 312.5, TARGET)
     expect(r.status).toBe('over-shoot')
-    expect(r.patterns[0].reached).toBe(TARGET - 312.5 + 2500)
+    expect(r.patterns[0].reached).toBe(TARGET - 312.5 + 2812.5)
   })
 
   // §5.5 / §9-2: 走査が MAX_OVERSHOOT_STEPS(5000) に達しても

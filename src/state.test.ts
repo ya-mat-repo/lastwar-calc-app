@@ -184,8 +184,9 @@ describe('togglePriorityValue', () => {
   })
 
   it(`${MAX_PRIORITY}件を超えて追加できない`, () => {
-    const full = [10, 20, 30]
-    expect(togglePriorityValue(full, 40)).toBe(full) // 変化なし（同一参照）
+    const full = [10, 20, 30, 40, 50]
+    expect(full).toHaveLength(MAX_PRIORITY)
+    expect(togglePriorityValue(full, 60)).toBe(full) // 変化なし（同一参照）
   })
 
   it('選択済みをもう一度押すと外れ、後ろの順位が繰り上がる', () => {
@@ -299,23 +300,23 @@ describe('結束グループ（火曜の兵装素材・兵装コア）', () => {
 
   it('兵装素材は 1個 = 2.5 から結束単位の値を出す', () => {
     expect(groupRows(material).map((r) => [r.size.label, r.value])).toEqual([
-      ['10k', 25000],
-      ['20k', 50000],
-      ['30k', 75000],
-      ['40k', 100000],
-      ['50k', 125000],
+      ['10k個', 25000],
+      ['20k個', 50000],
+      ['30k個', 75000],
+      ['40k個', 100000],
+      ['50k個', 125000],
     ])
   })
 
   it('兵装コアは 1個 = 6250 から結束単位の値を出す', () => {
     expect(groupRows(core).map((r) => [r.size.label, r.value])).toEqual([
-      ['10', 62500],
-      ['20', 125000],
-      ['30', 187500],
-      ['40', 250000],
-      ['50', 312500],
-      ['60', 375000],
-      ['70', 437500],
+      ['10個', 62500],
+      ['20個', 125000],
+      ['30個', 187500],
+      ['40個', 250000],
+      ['50個', 312500],
+      ['60個', 375000],
+      ['70個', 437500],
     ])
   })
 
@@ -418,10 +419,24 @@ describe('toPrepared: グループの展開', () => {
     expect(p.options).toHaveLength(16)
   })
 
-  it('グループの無い曜日（月・木）は今までどおり', () => {
+  it('月曜はかけら3種がグループになり、残りは通常の行のまま', () => {
     const mon = toEditable().find((d) => d.key === 'mon')!
-    expect(mon.groups).toEqual([])
-    expect(toPrepared(mon).options).toHaveLength(9)
+    expect(mon.groups.map((g) => g.def.name)).toEqual([
+      'UR英雄かけら',
+      'SSR英雄かけら',
+      'SR英雄かけら',
+    ])
+    expect(mon.items.map((i) => i.label)).toEqual([
+      '10APを消費（野良ゾンビ倒す）',
+      '20APを消費（終末精鋭集結）',
+      'チップ宝箱(R)開封',
+      'チップ宝箱(SR)開封',
+      'チップ宝箱(SSR)開封',
+      'チップ宝箱(UR)開封',
+    ])
+    // かけら3種×5サイズ + 通常6行 = 21。重なる値は無いので選択肢も 21 件
+    expect(countRows(mon)).toBe(21)
+    expect(toPrepared(mon).options).toHaveLength(21)
   })
 })
 
@@ -447,6 +462,100 @@ describe('isModified: グループ', () => {
   })
 })
 
+describe('かけらの結束グループ（月曜・木曜）', () => {
+  const ur = editableGroup(groupDef('mon', 'ur'))
+  const awaken = editableGroup(groupDef('thu', 'awaken'))
+
+  it('1枚あたりの値から 10〜50枚 の値を出す', () => {
+    expect(groupRows(ur).map((r) => [r.size.label, r.value])).toEqual([
+      ['10枚', 250000],
+      ['20枚', 500000],
+      ['30枚', 750000],
+      ['40枚', 1000000],
+      ['50枚', 1250000],
+    ])
+  })
+
+  // 兵装素材・兵装コアと同じく、かけらも結束単位でしか使わない
+  it('1枚ぶん（×1）は選択肢にならない', () => {
+    expect(ur.def.sizes.every((s) => s.multiplier >= 10)).toBe(true)
+    expect(groupItems([ur]).map((i) => i.value)).not.toContain(ur.def.base)
+  })
+
+  it('行動名は「◯◯◯枚消費」で、種類名が付く', () => {
+    expect(groupRows(ur).map((r) => r.label)).toEqual([
+      'UR英雄かけら10枚消費',
+      'UR英雄かけら20枚消費',
+      'UR英雄かけら30枚消費',
+      'UR英雄かけら40枚消費',
+      'UR英雄かけら50枚消費',
+    ])
+    expect(groupRows(awaken)[0].label).toBe('覚醒かけら10枚消費')
+  })
+
+  it('木曜は5種すべてがグループになり、英雄募集だけが通常の行として残る', () => {
+    const thu = toEditable().find((d) => d.key === 'thu')!
+    expect(thu.groups.map((g) => g.def.name)).toEqual([
+      '覚醒かけら',
+      '専用武装のかけら',
+      'UR英雄かけら',
+      'SSR英雄かけら',
+      'SR英雄かけら',
+    ])
+    expect(thu.items.map((i) => i.label)).toEqual(['英雄募集1回'])
+    expect(countRows(thu)).toBe(26) // 5種×5サイズ + 1行
+  })
+
+  it('同じ値のかけらは1つの選択肢にまとまる（木曜の 1枚=25,000 は3種）', () => {
+    const thu = toEditable().find((d) => d.key === 'thu')!
+    const p = toPrepared(thu)
+    expect(p.options.find((o) => o.value === 250000)?.labels).toEqual([
+      '覚醒かけら10枚消費',
+      '専用武装のかけら10枚消費',
+      'UR英雄かけら10枚消費',
+    ])
+    // 1枚ぶんは選択肢にならないので 25,000 は SR英雄かけら10枚だけ
+    expect(p.options.find((o) => o.value === 25000)?.labels).toEqual(['SR英雄かけら10枚消費'])
+    expect(p.options).toHaveLength(16)
+  })
+})
+
+describe('Option.order（優先チップの並び順）', () => {
+  it('獲得値パネルと同じ並び（グループ → 通常の行）になる', () => {
+    const tue = toEditable().find((d) => d.key === 'tue')!
+    const byOrder = [...toPrepared(tue).options].sort((a, b) => a.order - b.order)
+    expect(byOrder.map((o) => o.labels[0])).toEqual([
+      '残り時間1分短縮',
+      '残り時間5分短縮',
+      '残り時間1時間短縮',
+      '残り時間3時間短縮',
+      '残り時間8時間短縮',
+      '兵装素材10k個使う',
+      '兵装素材20k個使う',
+      '兵装素材30k個使う',
+      '兵装素材40k個使う',
+      '兵装素材50k個使う', // 兵装コア20個 と同値なのでここにまとまる
+      '兵装コア10個使う',
+      '兵装コア30個使う',
+      '兵装コア40個使う',
+      '兵装コア50個使う',
+      '兵装コア60個使う',
+      '兵装コア70個使う',
+      '生存者募集1回',
+    ])
+  })
+
+  it('order は連番で、値の降順（探索用の並び）とは独立している', () => {
+    const p = toPrepared(toEditable().find((d) => d.key === 'tue')!)
+    expect([...p.options].map((o) => o.order).sort((a, b) => a - b)).toEqual(
+      p.options.map((_, i) => i),
+    )
+    expect(p.options.map((o) => o.value)).toEqual(
+      [...p.options].map((o) => o.value).sort((a, b) => b - a),
+    )
+  })
+})
+
 describe('applyPriorityTap', () => {
   const options = [{ value: 100 }, { value: 200 }, { value: 300 }, { value: 400 }]
 
@@ -466,9 +575,10 @@ describe('applyPriorityTap', () => {
     expect(applyPriorityTap([100, 999, 200], 400, options)).not.toContain(999)
   })
 
-  it('実在する値が3件あれば、やはり4件目は追加できない', () => {
-    const stored = [100, 200, 300, 999]
-    expect(applyPriorityTap(stored, 400, options)).toEqual([100, 200, 300])
+  it(`実在する値が${MAX_PRIORITY}件あれば、それ以上は追加できない`, () => {
+    const many = [100, 200, 300, 400, 500, 600].slice(0, MAX_PRIORITY)
+    const full = many.map((value) => ({ value }))
+    expect(applyPriorityTap([...many, 999], 700, [...full, { value: 700 }])).toEqual(many)
   })
 
   it('全ての選択肢が消えていれば、タップした値だけが残る', () => {
