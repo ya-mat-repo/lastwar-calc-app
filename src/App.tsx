@@ -1,5 +1,5 @@
 import { useDeferredValue, useEffect, useMemo, useState } from 'react'
-import { DAYS, TARGET } from './data'
+import { DAYS, TARGET, groupHeading, groupListTitle, groupTag } from './data'
 import type { DayKey } from './data'
 import { solveDay } from './solver'
 import type { SolveResult } from './solver'
@@ -16,14 +16,14 @@ import {
   parseCurrent,
   parseNumber,
   prunePriority,
-  removeSpeedup,
+  removeGroup,
   resetDayItems,
-  speedupRows,
+  groupRows,
   toEditable,
-  toggleSpeedupSize,
+  toggleGroupSize,
   toPrepared,
 } from './state'
-import type { EditableDay, EditableItem, EditableSpeedup, PriorityMap } from './state'
+import type { EditableDay, EditableGroup, EditableItem, PriorityMap } from './state'
 
 const STORAGE_KEY = 'lastwar-calc:current'
 const PANEL_ID = 'day-panel'
@@ -99,18 +99,23 @@ export default function App() {
 
   const resetDay = (): void => setDays((prev) => resetDayItems(prev, dayKey))
 
-  /** 加速の基準値（1分あたり）。変えると全サイズが追従する */
-  const editSpeedupBase = (raw: string): void =>
-    updateDay((d) => (d.speedup ? { ...d, speedup: { ...d.speedup, raw } } : d))
+  /** グループの基準値（1分あたり / 1個あたり）。変えると全サイズが追従する */
+  const editGroupBase = (groupKey: string, raw: string): void =>
+    updateDay((d) => ({
+      ...d,
+      groups: d.groups.map((g) => (g.def.key === groupKey ? { ...g, raw } : g)),
+    }))
 
-  const toggleSize = (key: string): void =>
-    updateDay((d) =>
-      d.speedup
-        ? { ...d, speedup: { ...d.speedup, enabled: toggleSpeedupSize(d.speedup.enabled, key) } }
-        : d,
-    )
+  const toggleSize = (groupKey: string, sizeKey: string): void =>
+    updateDay((d) => ({
+      ...d,
+      groups: d.groups.map((g) =>
+        g.def.key === groupKey ? { ...g, enabled: toggleGroupSize(g.enabled, sizeKey) } : g,
+      ),
+    }))
 
-  const removeSpeedupGroup = (): void => updateDay(removeSpeedup)
+  const removeGroupByKey = (groupKey: string): void =>
+    updateDay((d) => removeGroup(d, groupKey))
 
   /** タップ順に①②③。選択済みをもう一度押すと外れ、後ろの順位が繰り上がる */
   const togglePriority = (value: number): void =>
@@ -204,14 +209,15 @@ export default function App() {
                 値は自由に変更できます。変更はこのページ内だけで有効で、リロードすると初期値に戻ります。
               </p>
 
-              {day.speedup && (
-                <SpeedupEditor
-                  speedup={day.speedup}
-                  onChangeBase={editSpeedupBase}
+              {day.groups.map((group) => (
+                <GroupEditor
+                  key={group.def.key}
+                  group={group}
+                  onChangeBase={editGroupBase}
                   onToggleSize={toggleSize}
-                  onRemove={removeSpeedupGroup}
+                  onRemove={removeGroupByKey}
                 />
-              )}
+              ))}
 
               <ul className="editor__list">
                 {day.items.map((item) => {
@@ -335,62 +341,71 @@ export default function App() {
 }
 
 /**
- * 加速アイテムの編集。
- * 編集できるのは「1分あたり」だけで、他のサイズはそこから計算した読み取り専用の値を出す。
+ * グループ（加速・結束）の編集。
+ * 編集できるのは基準値だけで、各サイズはそこから計算した読み取り専用の値を出す。
  * disabled な入力欄にすると「押せば編集できそう」に見えるので、あえて input にしていない。
  */
-function SpeedupEditor({
-  speedup,
+function GroupEditor({
+  group,
   onChangeBase,
   onToggleSize,
   onRemove,
 }: {
-  speedup: EditableSpeedup
-  onChangeBase: (raw: string) => void
-  onToggleSize: (key: string) => void
-  onRemove: () => void
+  group: EditableGroup
+  onChangeBase: (groupKey: string, raw: string) => void
+  onToggleSize: (groupKey: string, sizeKey: string) => void
+  onRemove: (groupKey: string) => void
 }) {
-  const rows = speedupRows(speedup)
-  const base = parseNumber(speedup.raw)
+  const def = group.def
+  const rows = groupRows(group)
+  const base = parseNumber(group.raw)
   const invalid = base === null || base <= 0
+  const baseId = `group-base-${def.key}`
+  const noteId = `${baseId}-note`
+  const heading = groupHeading(def)
 
   return (
-    <section className="speedup">
-      <div className="speedup__head">
-        <span className="speedup__tag">加速</span>
-        <span className="speedup__name">{speedup.name}の残り時間短縮</span>
-        <button className="speedup__remove" onClick={onRemove} aria-label="加速グループを削除">
+    <section className="group" data-group={def.key}>
+      <div className="group__head">
+        <span className={'group__tag' + (def.kind === 'bundle' ? ' group__tag--bundle' : '')}>
+          {groupTag(def)}
+        </span>
+        <span className="group__name">{heading}</span>
+        <button
+          className="group__remove"
+          onClick={() => onRemove(def.key)}
+          aria-label={`${heading}を削除`}
+        >
           ✕
         </button>
       </div>
 
-      <div className="speedup__base">
-        <label className="speedup__baseLabel" htmlFor="speedup-base">
-          基準 1分 =
+      <div className="group__base">
+        <label className="group__baseLabel" htmlFor={baseId}>
+          基準 {def.unitLabel} =
         </label>
         <input
-          id="speedup-base"
-          className={'speedup__baseInput' + (invalid ? ' speedup__baseInput--invalid' : '')}
+          id={baseId}
+          className={'group__baseInput' + (invalid ? ' group__baseInput--invalid' : '')}
           type="text"
           inputMode="decimal"
           placeholder="0"
-          value={speedup.raw}
+          value={group.raw}
+          // 同じ曜日に「基準 1個 =」のグループが複数並ぶので、名前で区別できるようにする
+          aria-label={`${def.name}の基準値（${def.unitLabel}あたり）`}
           aria-invalid={invalid}
-          aria-describedby="speedup-base-note"
-          onChange={(e) => onChangeBase(e.target.value)}
+          aria-describedby={noteId}
+          onChange={(e) => onChangeBase(def.key, e.target.value)}
         />
       </div>
-      <p
-        className={'speedup__note' + (invalid ? ' speedup__note--invalid' : '')}
-        id="speedup-base-note"
-      >
+      <p className={'group__note' + (invalid ? ' group__note--invalid' : '')} id={noteId}>
         {invalid
-          ? '1分あたりの値を入れてください'
+          ? `${def.unitLabel}あたりの値を入れてください`
           : '編集できるのはここだけです。ほかのサイズは自動で計算されます。'}
       </p>
 
-      <p className="speedup__listTitle">持っている加速アイテム</p>
-      <ul className="speedup__list">
+      <p className="group__listTitle">{groupListTitle(def)}</p>
+      <ul className="group__list">
         {rows.map((row) => (
           <li key={row.size.key}>
             <label className={'size' + (row.enabled ? '' : ' size--off')}>
@@ -398,12 +413,14 @@ function SpeedupEditor({
                 type="checkbox"
                 className="size__check"
                 checked={row.enabled}
-                onChange={() => onToggleSize(row.size.key)}
+                onChange={() => onToggleSize(def.key, row.size.key)}
               />
               <span className="size__label">{row.size.label}</span>
               <span className="size__value">{row.value === null ? '—' : fmt(row.value)}</span>
               <span className="size__formula">
-                {row.size.minutes === 1 ? '基準' : `1分 × ${row.size.minutes}`}
+                {row.size.multiplier === 1
+                  ? '基準'
+                  : `${def.unitLabel} × ${fmt(row.size.multiplier)}`}
               </span>
             </label>
           </li>

@@ -405,8 +405,8 @@ body {
   gap: 6px;
 }
 
-/* ---------- 加速グループ ---------- */
-.speedup {
+/* ---------- グループ（加速・結束） ---------- */
+.group {
   margin-bottom: 12px;
   padding: 10px;
   background: var(--panel-2);
@@ -414,14 +414,14 @@ body {
   border-radius: 8px;
 }
 
-.speedup__head {
+.group__head {
   display: flex;
   align-items: center;
   gap: 7px;
   margin-bottom: 10px;
 }
 
-.speedup__tag {
+.group__tag {
   flex: none;
   font-size: 10px;
   font-weight: 800;
@@ -431,7 +431,13 @@ body {
   padding: 2px 6px;
 }
 
-.speedup__name {
+/* 結束は加速と別物なので、バッジの色で区別する */
+.group__tag--bundle {
+  color: #fff;
+  background: var(--red);
+}
+
+.group__name {
   min-width: 0;
   font-size: 12px;
   font-weight: 700;
@@ -439,7 +445,7 @@ body {
   overflow-wrap: anywhere;
 }
 
-.speedup__remove {
+.group__remove {
   flex: none;
   margin-left: auto;
   display: flex;
@@ -455,18 +461,18 @@ body {
   cursor: pointer;
 }
 
-.speedup__remove:hover {
+.group__remove:hover {
   color: var(--red);
   border-color: var(--red);
 }
 
-.speedup__base {
+.group__base {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.speedup__baseLabel {
+.group__baseLabel {
   flex: none;
   font-size: 12px;
   font-weight: 700;
@@ -475,7 +481,7 @@ body {
 }
 
 /* 16px 未満にしないこと（iOS Safari の自動ズーム対策） */
-.speedup__baseInput {
+.group__baseInput {
   min-width: 0;
   flex: 1;
   max-width: 120px;
@@ -492,29 +498,29 @@ body {
   outline: none;
 }
 
-.speedup__baseInput:focus {
+.group__baseInput:focus {
   border-color: var(--gold);
 }
 
-.speedup__baseInput--invalid,
-.speedup__baseInput--invalid:focus {
+.group__baseInput--invalid,
+.group__baseInput--invalid:focus {
   border-color: var(--red);
   color: var(--red);
 }
 
-.speedup__note {
+.group__note {
   margin-top: 6px;
   font-size: 11px;
   line-height: 1.5;
   color: var(--muted);
 }
 
-.speedup__note--invalid {
+.group__note--invalid {
   color: var(--red);
   font-weight: 700;
 }
 
-.speedup__listTitle {
+.group__listTitle {
   margin: 12px 0 4px;
   font-size: 11px;
   font-weight: 700;
@@ -522,7 +528,7 @@ body {
   color: var(--muted);
 }
 
-.speedup__list {
+.group__list {
   list-style: none;
 }
 

@@ -76,8 +76,8 @@ describe('App: 基本の流れ', () => {
     expect(screen.getByLabelText('現在値')).toHaveProperty('value', '6850000')
     expect(screen.getByRole('tab', { name: '火曜日' }).getAttribute('aria-selected')).toBe('true')
     await screen.findByLabelText('生存者募集1回の獲得値')
-    // 火曜の 350,000 は 150/4500 では作れないので超過側になる
-    expect(await screen.findByText(/目標値を超える最も近い値/)).toBeTruthy()
+    // 火曜の 350,000 は 兵装素材10k（25,000）×14 でぴったり作れる
+    expect(await screen.findByText(/ぴったり/)).toBeTruthy()
   })
 
   it('現在値だけ localStorage に保存され、再マウントで復元される', async () => {
@@ -171,29 +171,34 @@ describe('App: 獲得値の編集', () => {
   })
 })
 
-describe('App: 加速アイテム', () => {
-  /** 加速グループの「サイズ名 → 表示値」 */
-  const sizeRows = (container: HTMLElement): [string, string][] =>
-    [...container.querySelectorAll('.speedup__list .size')].map((row) => [
+describe('App: グループ（加速・結束）', () => {
+  /** グループの「サイズ名 → 表示値」 */
+  const sizeRows = (container: HTMLElement, groupKey: string): [string, string][] =>
+    [...container.querySelectorAll(`[data-group="${groupKey}"] .size`)].map((row) => [
       row.querySelector('.size__label')?.textContent ?? '',
       row.querySelector('.size__value')?.textContent ?? '',
     ])
 
-  const checkbox = (container: HTMLElement, label: string): HTMLInputElement => {
-    const row = [...container.querySelectorAll('.speedup__list .size')].find(
+  const checkbox = (container: HTMLElement, groupKey: string, label: string): HTMLInputElement => {
+    const row = [...container.querySelectorAll(`[data-group="${groupKey}"] .size`)].find(
       (r) => r.querySelector('.size__label')?.textContent === label,
     )
-    if (!row) throw new Error(`${label} の行が無い`)
+    if (!row) throw new Error(`${groupKey}/${label} の行が無い`)
     return row.querySelector('input[type=checkbox]') as HTMLInputElement
   }
 
-  it('火曜には加速グループが出て、1分の値から全サイズが計算される', () => {
-    const { container } = render(<App />)
+  const openTue = (): ReturnType<typeof render> => {
+    const view = render(<App />)
     fireEvent.click(screen.getByRole('tab', { name: '火曜日' }))
+    return view
+  }
+
+  it('火曜には加速グループが出て、1分の値から全サイズが計算される', () => {
+    const { container } = openTue()
 
     expect(screen.getByText('建造の残り時間短縮')).toBeTruthy()
-    expect(screen.getByLabelText('基準 1分 =')).toHaveProperty('value', '150')
-    expect(sizeRows(container)).toEqual([
+    expect(screen.getByLabelText('建造の基準値（1分あたり）')).toHaveProperty('value', '150')
+    expect(sizeRows(container, 'speedup')).toEqual([
       ['1分', '150'],
       ['5分', '750'],
       ['1時間', '9,000'],
@@ -202,24 +207,63 @@ describe('App: 加速アイテム', () => {
     ])
   })
 
-  it('派生サイズには入力欄を出さない（編集できるのは基準だけ）', () => {
-    const { container } = render(<App />)
-    fireEvent.click(screen.getByRole('tab', { name: '火曜日' }))
+  it('火曜には結束グループが2つ出て、1個の値から結束単位が計算される', () => {
+    const { container } = openTue()
 
-    const group = container.querySelector('.speedup') as HTMLElement
-    const textInputs = group.querySelectorAll('input:not([type=checkbox])')
-    expect(textInputs).toHaveLength(1)
-    expect((textInputs[0] as HTMLInputElement).id).toBe('speedup-base')
+    expect(screen.getByText('兵装素材の結束')).toBeTruthy()
+    expect(screen.getByText('兵装コアの結束')).toBeTruthy()
+    expect(screen.getByLabelText('兵装素材の基準値（1個あたり）')).toHaveProperty('value', '2.5')
+    expect(screen.getByLabelText('兵装コアの基準値（1個あたり）')).toHaveProperty('value', '6250')
+
+    expect(sizeRows(container, 'material')).toEqual([
+      ['10k', '25,000'],
+      ['20k', '50,000'],
+      ['30k', '75,000'],
+      ['40k', '100,000'],
+      ['50k', '125,000'],
+    ])
+    expect(sizeRows(container, 'core')).toEqual([
+      ['10', '62,500'],
+      ['20', '125,000'],
+      ['30', '187,500'],
+      ['40', '250,000'],
+      ['50', '312,500'],
+      ['60', '375,000'],
+      ['70', '437,500'],
+    ])
+  })
+
+  it('結束は「1個ずつでは使えません」と示し、1個ぶんの行は出さない', () => {
+    const { container } = openTue()
+    expect(screen.getAllByText('使う結束単位（1個ずつでは使えません）')).toHaveLength(2)
+    // ×1 の行が無い＝基準値そのものは選択肢にならない
+    expect(sizeRows(container, 'material').map(([, v]) => v)).not.toContain('2.5')
+    expect(container.querySelectorAll('[data-group="material"] .size')).toHaveLength(5)
+  })
+
+  it('派生サイズには入力欄を出さない（編集できるのは基準だけ）', () => {
+    const { container } = openTue()
+
+    for (const key of ['speedup', 'material', 'core']) {
+      const group = container.querySelector(`[data-group="${key}"]`) as HTMLElement
+      const textInputs = group.querySelectorAll('input:not([type=checkbox])')
+      expect(textInputs).toHaveLength(1)
+      expect((textInputs[0] as HTMLInputElement).id).toBe(`group-base-${key}`)
+    }
   })
 
   it('基準値を変えると全サイズが追従する', async () => {
-    const { container } = render(<App />)
-    fireEvent.click(screen.getByRole('tab', { name: '火曜日' }))
+    const { container } = openTue()
 
-    fireEvent.change(screen.getByLabelText('基準 1分 ='), { target: { value: '200' } })
+    fireEvent.change(screen.getByLabelText('建造の基準値（1分あたり）'), {
+      target: { value: '200' },
+    })
+    fireEvent.change(screen.getByLabelText('兵装素材の基準値（1個あたり）'), {
+      target: { value: '5' },
+    })
 
     await waitFor(() =>
-      expect(sizeRows(container)).toEqual([
+      expect(sizeRows(container, 'speedup')).toEqual([
         ['1分', '200'],
         ['5分', '1,000'],
         ['1時間', '12,000'],
@@ -227,22 +271,50 @@ describe('App: 加速アイテム', () => {
         ['8時間', '96,000'],
       ]),
     )
+    expect(sizeRows(container, 'material')).toEqual([
+      ['10k', '50,000'],
+      ['20k', '100,000'],
+      ['30k', '150,000'],
+      ['40k', '200,000'],
+      ['50k', '250,000'],
+    ])
   })
 
   it('基準値が空なら値を出さず、注意書きを赤くする', async () => {
-    const { container } = render(<App />)
-    fireEvent.click(screen.getByRole('tab', { name: '火曜日' }))
+    const { container } = openTue()
 
-    fireEvent.change(screen.getByLabelText('基準 1分 ='), { target: { value: '' } })
+    fireEvent.change(screen.getByLabelText('建造の基準値（1分あたり）'), { target: { value: '' } })
 
     expect(await screen.findByText('1分あたりの値を入れてください')).toBeTruthy()
-    expect(screen.getByLabelText('基準 1分 =').getAttribute('aria-invalid')).toBe('true')
-    expect(sizeRows(container).map(([, v]) => v)).toEqual(['—', '—', '—', '—', '—'])
+    expect(screen.getByLabelText('建造の基準値（1分あたり）').getAttribute('aria-invalid')).toBe(
+      'true',
+    )
+    expect(sizeRows(container, 'speedup').map(([, v]) => v)).toEqual(['—', '—', '—', '—', '—'])
+    // 他のグループは巻き込まれない
+    expect(sizeRows(container, 'material')[0][1]).toBe('25,000')
+  })
+
+  it('結束の基準値が空なら 1個あたりの値を求める', async () => {
+    const { container } = openTue()
+
+    fireEvent.change(screen.getByLabelText('兵装コアの基準値（1個あたり）'), {
+      target: { value: '' },
+    })
+
+    expect(await screen.findByText('1個あたりの値を入れてください')).toBeTruthy()
+    expect(sizeRows(container, 'core').map(([, v]) => v)).toEqual([
+      '—',
+      '—',
+      '—',
+      '—',
+      '—',
+      '—',
+      '—',
+    ])
   })
 
   it('加速が計算に使われる（7,199,850 は 1分短縮×1 でぴったり）', async () => {
-    const { container } = render(<App />)
-    fireEvent.click(screen.getByRole('tab', { name: '火曜日' }))
+    const { container } = openTue()
     typeCurrent('7199850')
 
     await waitFor(() => expect(cards(container).length).toBeGreaterThan(0))
@@ -251,40 +323,76 @@ describe('App: 加速アイテム', () => {
     expect(within(first).getByText('×1')).toBeTruthy()
   })
 
+  it('結束が計算に使われる（7,137,500 は 兵装コア10×1 でぴったり）', async () => {
+    const { container } = openTue()
+    typeCurrent('7137500') // 不足 62,500 ＝ 兵装コア10個ぶん
+
+    await waitFor(() => expect(cards(container).length).toBeGreaterThan(0))
+    const first = cards(container)[0]
+    expect(within(first).getByText('兵装コア10個使う')).toBeTruthy()
+    expect(within(first).getByText('×1')).toBeTruthy()
+  })
+
+  it('同じ値の結束単位は1つの選択肢にまとまる', async () => {
+    const { container } = openTue()
+    typeCurrent('7075000') // 不足 125,000 ＝ 兵装素材50k ＝ 兵装コア20
+
+    await waitFor(() => expect(cards(container).length).toBeGreaterThan(0))
+    expect(
+      within(cards(container)[0]).getByText('兵装素材50k個使う / 兵装コア20個使う'),
+    ).toBeTruthy()
+  })
+
   it('持っていないサイズのチェックを外すと候補から消える', async () => {
-    const { container } = render(<App />)
-    fireEvent.click(screen.getByRole('tab', { name: '火曜日' }))
+    const { container } = openTue()
     typeCurrent('7128000') // 不足 72,000 ＝ 8時間×1
 
     await waitFor(() => {
       expect(within(cards(container)[0]).queryByText('残り時間8時間短縮')).toBeTruthy()
     })
 
-    fireEvent.click(checkbox(container, '8時間'))
+    fireEvent.click(checkbox(container, 'speedup', '8時間'))
 
     // 8時間が無くなるので、8時間×1 の解は出せなくなる
     await waitFor(() => {
       expect(within(cards(container)[0]).queryByText('残り時間8時間短縮')).toBeNull()
     })
-    expect(checkbox(container, '8時間').checked).toBe(false)
+    expect(checkbox(container, 'speedup', '8時間').checked).toBe(false)
     // 外した行も一覧には残る（値は見える）
-    expect(sizeRows(container).map(([s]) => s)).toContain('8時間')
+    expect(sizeRows(container, 'speedup').map(([s]) => s)).toContain('8時間')
+  })
+
+  it('使わない結束単位のチェックを外すと候補から消える', async () => {
+    const { container } = openTue()
+    typeCurrent('7137500') // 不足 62,500 ＝ 兵装コア10×1
+
+    await waitFor(() => {
+      expect(within(cards(container)[0]).queryByText('兵装コア10個使う')).toBeTruthy()
+    })
+
+    fireEvent.click(checkbox(container, 'core', '10'))
+
+    await waitFor(() => {
+      expect(within(cards(container)[0]).queryByText('兵装コア10個使う')).toBeNull()
+    })
+    expect(checkbox(container, 'core', '10').checked).toBe(false)
   })
 
   it('チェックを外すと件数表示が減り、編集済みになる', async () => {
-    const { container } = render(<App />)
-    fireEvent.click(screen.getByRole('tab', { name: '火曜日' }))
-    expect(screen.getByText('6件')).toBeTruthy() // 加速5 + 生存者募集1
+    const { container } = openTue()
+    // 加速5 + 兵装素材5 + 兵装コア7 + 生存者募集1
+    expect(screen.getByText('18件')).toBeTruthy()
 
-    fireEvent.click(checkbox(container, '3時間'))
+    fireEvent.click(checkbox(container, 'speedup', '3時間'))
+    expect(await screen.findByText('17件')).toBeTruthy()
 
-    expect(await screen.findByText('5件')).toBeTruthy()
+    fireEvent.click(checkbox(container, 'core', '70'))
+    expect(await screen.findByText('16件')).toBeTruthy()
     expect(screen.getByText('編集済み')).toBeTruthy()
   })
 
   it('チェックを外したサイズは優先チップからも消え、優先指定も外れる', async () => {
-    const { container } = render(<App />)
-    fireEvent.click(screen.getByRole('tab', { name: '火曜日' }))
+    const { container } = openTue()
     typeCurrent('6850000')
     await waitFor(() => expect(cards(container).length).toBeGreaterThan(0))
 
@@ -292,7 +400,7 @@ describe('App: 加速アイテム', () => {
     fireEvent.click(chip(panel, /8時間短縮/))
     await waitFor(() => expect(ranksIn(panel)).toEqual(['①']))
 
-    fireEvent.click(checkbox(container, '8時間'))
+    fireEvent.click(checkbox(container, 'speedup', '8時間'))
 
     await waitFor(() =>
       expect(within(panel).queryByRole('button', { name: /8時間短縮/ })).toBeNull(),
@@ -300,47 +408,57 @@ describe('App: 加速アイテム', () => {
     expect(ranksIn(panel)).toEqual([])
   })
 
-  it('加速グループごと削除できて、初期値に戻せる', async () => {
-    const { container } = render(<App />)
-    fireEvent.click(screen.getByRole('tab', { name: '火曜日' }))
+  it('グループごと削除できて、初期値に戻せる', async () => {
+    const { container } = openTue()
 
-    fireEvent.click(screen.getByRole('button', { name: '加速グループを削除' }))
-    await waitFor(() => expect(container.querySelector('.speedup')).toBeNull())
+    fireEvent.click(screen.getByRole('button', { name: '建造の残り時間短縮を削除' }))
+    await waitFor(() => expect(container.querySelector('[data-group="speedup"]')).toBeNull())
     expect(screen.getByText('編集済み')).toBeTruthy()
+    // 他のグループは残る
+    expect(container.querySelectorAll('.group')).toHaveLength(2)
+
+    fireEvent.click(screen.getByRole('button', { name: '兵装素材の結束を削除' }))
+    await waitFor(() => expect(container.querySelectorAll('.group')).toHaveLength(1))
 
     fireEvent.click(screen.getByRole('button', { name: /初期値に戻す/ }))
-    await waitFor(() => expect(container.querySelector('.speedup')).toBeTruthy())
-    expect(sizeRows(container).map(([, v]) => v)).toEqual([
+    await waitFor(() => expect(container.querySelectorAll('.group')).toHaveLength(3))
+    expect(sizeRows(container, 'speedup').map(([, v]) => v)).toEqual([
       '150',
       '750',
       '9,000',
       '27,000',
       '72,000',
     ])
+    expect(sizeRows(container, 'material').map(([, v]) => v)).toEqual([
+      '25,000',
+      '50,000',
+      '75,000',
+      '100,000',
+      '125,000',
+    ])
   })
 
   it('「初期値に戻す」でチェックも全部戻る', async () => {
-    const { container } = render(<App />)
-    fireEvent.click(screen.getByRole('tab', { name: '火曜日' }))
-    fireEvent.click(checkbox(container, '3時間'))
-    fireEvent.click(checkbox(container, '8時間'))
-    await waitFor(() => expect(checkbox(container, '8時間').checked).toBe(false))
+    const { container } = openTue()
+    fireEvent.click(checkbox(container, 'speedup', '3時間'))
+    fireEvent.click(checkbox(container, 'core', '70'))
+    await waitFor(() => expect(checkbox(container, 'core', '70').checked).toBe(false))
 
     fireEvent.click(screen.getByRole('button', { name: /初期値に戻す/ }))
-    await waitFor(() => expect(checkbox(container, '3時間').checked).toBe(true))
-    expect(checkbox(container, '8時間').checked).toBe(true)
+    await waitFor(() => expect(checkbox(container, 'speedup', '3時間').checked).toBe(true))
+    expect(checkbox(container, 'core', '70').checked).toBe(true)
   })
 
-  it('加速のない月曜にはグループを出さない', () => {
+  it('グループのない月曜には枠を出さない', () => {
     const { container } = render(<App />)
-    expect(container.querySelector('.speedup')).toBeNull()
+    expect(container.querySelector('.group')).toBeNull()
   })
 
   it('金曜は建造・科学研究・訓練が1グループにまとまっている', () => {
     const { container } = render(<App />)
     fireEvent.click(screen.getByRole('tab', { name: '金曜日' }))
     expect(screen.getByText('建造・科学研究・訓練の残り時間短縮')).toBeTruthy()
-    expect(container.querySelectorAll('.speedup')).toHaveLength(1)
+    expect(container.querySelectorAll('.group')).toHaveLength(1)
   })
 })
 
@@ -476,7 +594,9 @@ describe('App: アクセシビリティの配線', () => {
     render(<App />)
     fireEvent.click(screen.getByRole('tab', { name: '火曜日' }))
     fireEvent.click(screen.getByRole('button', { name: '生存者募集1回を削除' }))
-    fireEvent.click(screen.getByRole('button', { name: '加速グループを削除' }))
+    for (const name of ['建造の残り時間短縮', '兵装素材の結束', '兵装コアの結束']) {
+      fireEvent.click(screen.getByRole('button', { name: `${name}を削除` }))
+    }
     await waitFor(() =>
       expect(screen.getByRole('button', { name: /優先して使うアイテム/ })).toHaveProperty(
         'disabled',

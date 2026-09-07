@@ -8,38 +8,95 @@ export interface DayItem {
   readonly value: number
 }
 
-/** 加速アイテムのサイズ。獲得ポイントは 1分あたりの値 × minutes とする */
-export interface SpeedupSize {
+/**
+ * 基準値に倍率を掛けて求めるグループの種別。
+ * - speedup: 加速アイテム（1分あたりの値 × 分数）
+ * - bundle:  結束（1個あたりの値 × 個数）。1個ずつでは使えず、結束単位でのみ使う
+ */
+export type GroupKind = 'speedup' | 'bundle'
+
+/** グループ内の 1 サイズ。獲得ポイントは 基準値 × multiplier とする */
+export interface GroupSize {
   readonly key: string
   readonly label: string
-  readonly minutes: number
+  readonly multiplier: number
 }
 
-export const SPEEDUP_SIZES: readonly SpeedupSize[] = [
-  { key: '1m', label: '1分', minutes: 1 },
-  { key: '5m', label: '5分', minutes: 5 },
-  { key: '1h', label: '1時間', minutes: 60 },
-  { key: '3h', label: '3時間', minutes: 180 },
-  { key: '8h', label: '8時間', minutes: 480 },
+export const SPEEDUP_SIZES: readonly GroupSize[] = [
+  { key: '1m', label: '1分', multiplier: 1 },
+  { key: '5m', label: '5分', multiplier: 5 },
+  { key: '1h', label: '1時間', multiplier: 60 },
+  { key: '3h', label: '3時間', multiplier: 180 },
+  { key: '8h', label: '8時間', multiplier: 480 },
 ]
 
-/**
- * 曜日ごとの加速グループ。
- * 編集できるのは 1分あたりの値だけで、他のサイズはそこから計算する。
- */
-export interface SpeedupGroup {
-  /** 「建造」「科学研究」「建造・科学研究・訓練」など。金曜は3種を1つにまとめている */
-  readonly name: string
-  /** 1分あたりの獲得ポイント（初期値） */
-  readonly perMinute: number
-}
+/** 結束単位。ラベルがそのままキーになり、倍率は「何個ぶんか」 */
+const bundleSizes = (sizes: readonly (readonly [string, number])[]): readonly GroupSize[] =>
+  sizes.map(([label, multiplier]) => ({ key: label, label, multiplier }))
+
+/** 兵装素材の結束単位（1個 = 2.5 なので 10k で 25,000） */
+export const MATERIAL_BUNDLES = bundleSizes([
+  ['10k', 10_000],
+  ['20k', 20_000],
+  ['30k', 30_000],
+  ['40k', 40_000],
+  ['50k', 50_000],
+])
+
+/** 兵装コアの結束単位 */
+export const CORE_BUNDLES = bundleSizes([
+  ['10', 10],
+  ['20', 20],
+  ['30', 30],
+  ['40', 40],
+  ['50', 50],
+  ['60', 60],
+  ['70', 70],
+])
 
 /**
- * 加速アイテムの行動名。例: 「残り時間1時間短縮」。
- * 1曜日につき加速グループは1つだけなので、種類名（建造・科学研究…）は付けない。
- * どの時間の短縮かは編集パネルのグループ見出しに出る。
+ * 曜日ごとのグループ。
+ * 編集できるのは基準値（1分あたり / 1個あたり）だけで、各サイズはそこから計算する。
  */
-export const speedupLabel = (size: SpeedupSize): string => `残り時間${size.label}短縮`
+export interface ItemGroup {
+  /** 曜日内で一意なキー */
+  readonly key: string
+  readonly kind: GroupKind
+  /** 「建造」「兵装素材」など。金曜の加速は3種を1つにまとめている */
+  readonly name: string
+  /** 基準の単位（「1分」「1個」）。編集欄の見出しに出る */
+  readonly unitLabel: string
+  /** 基準 1 単位あたりの獲得ポイント（初期値） */
+  readonly base: number
+  /**
+   * 計算に使えるサイズ。
+   * 結束はここに ×1 を入れない（1個ずつでは使えず、結束単位でしか使えないため）。
+   */
+  readonly sizes: readonly GroupSize[]
+}
+
+/** 編集パネルの見出しに付ける種別バッジ */
+export const groupTag = (group: ItemGroup): string =>
+  group.kind === 'speedup' ? '加速' : '結束'
+
+/** 編集パネルのグループ見出し */
+export const groupHeading = (group: ItemGroup): string =>
+  group.kind === 'speedup' ? `${group.name}の残り時間短縮` : `${group.name}の結束`
+
+/** チェックボックス一覧の見出し */
+export const groupListTitle = (group: ItemGroup): string =>
+  group.kind === 'speedup' ? '持っている加速アイテム' : '使う結束単位（1個ずつでは使えません）'
+
+/**
+ * グループから展開したアイテムの行動名。
+ * 加速は「残り時間1時間短縮」。1曜日につき加速グループは1つだけなので、
+ * 種類名（建造・科学研究…）は付けず、編集パネルの見出しで示す。
+ * 結束は同じ曜日に複数グループが並ぶので「兵装素材10k個使う」と種類名を付ける。
+ */
+export const groupItemLabel = (group: ItemGroup, size: GroupSize): string =>
+  group.kind === 'speedup'
+    ? `残り時間${size.label}短縮`
+    : `${group.name}${size.label}個使う`
 
 export interface Day {
   readonly key: DayKey
@@ -47,21 +104,19 @@ export interface Day {
   readonly label: string
   readonly name: string
   readonly items: readonly DayItem[]
-  /** 加速アイテムがある曜日のみ */
-  readonly speedup?: SpeedupGroup
+  /** 基準値から展開するグループ（加速・結束）。無い曜日もある */
+  readonly groups?: readonly ItemGroup[]
 }
 
-/** 加速グループを全サイズ展開した、その曜日の全アイテム */
+/** グループを全サイズ展開した、その曜日の全アイテム */
 export function expandDayItems(day: Day): DayItem[] {
-  const speedup = day.speedup
-  if (!speedup) return [...day.items]
-  return [
-    ...SPEEDUP_SIZES.map((size) => ({
-      label: speedupLabel(size),
-      value: speedup.perMinute * size.minutes,
+  const fromGroups = (day.groups ?? []).flatMap((group) =>
+    group.sizes.map((size) => ({
+      label: groupItemLabel(group, size),
+      value: group.base * size.multiplier,
     })),
-    ...day.items,
-  ]
+  )
+  return [...fromGroups, ...day.items]
 }
 
 /**
@@ -89,14 +144,48 @@ export const DAYS: readonly Day[] = [
     key: 'tue',
     label: '火',
     name: '火曜日',
-    speedup: { name: '建造', perMinute: 150 },
+    groups: [
+      {
+        key: 'speedup',
+        kind: 'speedup',
+        name: '建造',
+        unitLabel: '1分',
+        base: 150,
+        sizes: SPEEDUP_SIZES,
+      },
+      {
+        key: 'material',
+        kind: 'bundle',
+        name: '兵装素材',
+        unitLabel: '1個',
+        base: 2.5,
+        sizes: MATERIAL_BUNDLES,
+      },
+      {
+        key: 'core',
+        kind: 'bundle',
+        name: '兵装コア',
+        unitLabel: '1個',
+        base: 6250,
+        sizes: CORE_BUNDLES,
+      },
+    ],
     items: [{ label: '生存者募集1回', value: 4500 }],
   },
   {
     key: 'wed',
     label: '水',
     name: '水曜日',
-    speedup: { name: '科学研究', perMinute: 150 },
+    groups: [
+      {
+        key: 'speedup',
+        kind: 'speedup',
+        name: '科学研究',
+        unitLabel: '1分',
+        base: 150,
+        sizes: SPEEDUP_SIZES,
+      },
+    ],
     items: [
       { label: 'Lv1ドローン部品宝箱開封', value: 2750 },
       { label: 'Lv2ドローン部品宝箱開封', value: 8250 },
@@ -124,7 +213,16 @@ export const DAYS: readonly Day[] = [
     label: '金',
     name: '金曜日',
     // 建造・科学研究・訓練は3種とも同じ値なので、ソルバーの同値まとめに合わせて1グループにする
-    speedup: { name: '建造・科学研究・訓練', perMinute: 150 },
+    groups: [
+      {
+        key: 'speedup',
+        kind: 'speedup',
+        name: '建造・科学研究・訓練',
+        unitLabel: '1分',
+        base: 150,
+        sizes: SPEEDUP_SIZES,
+      },
+    ],
     items: [
       { label: 'Lv1兵士を1体訓練', value: 56 },
       { label: 'Lv2兵士を1体訓練', value: 84 },
