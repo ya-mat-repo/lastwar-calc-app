@@ -127,6 +127,24 @@ export function parseTarget(raw: string): { value: number | null; invalid: boole
   return { value: n, invalid: false }
 }
 
+/** 現在値と目標値の差。remaining=まだ足りない / exact=ちょうど / over=超えている */
+export interface Gap {
+  readonly kind: 'remaining' | 'exact' | 'over'
+  /** 差の大きさ（常に 0 以上） */
+  readonly amount: number
+}
+
+/**
+ * 現在値が目標値に対してどこにあるか。
+ * 計算機の「目標まで ◯◯」とトップページの「前回のつづき」で同じ判定を使う。
+ */
+export function gapToTarget(current: number, target: number): Gap {
+  const diff = target - current
+  if (diff > 0) return { kind: 'remaining', amount: diff }
+  if (diff === 0) return { kind: 'exact', amount: 0 }
+  return { kind: 'over', amount: -diff }
+}
+
 /** グループの1行ぶんの表示データ */
 export interface GroupRow {
   readonly size: GroupSize

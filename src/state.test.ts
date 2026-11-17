@@ -11,6 +11,7 @@ import {
   isModified,
   parseCurrent,
   MAX_TARGET,
+  gapToTarget,
   parseTarget,
   labelOf,
   parseNumber,
@@ -97,6 +98,18 @@ describe('parseTarget', () => {
     ['-100', null, true],
   ])('%o → value=%o invalid=%o', (input, value, invalid) => {
     expect(parseTarget(input)).toEqual({ value, invalid })
+  })
+})
+
+describe('gapToTarget', () => {
+  it.each<[number, number, string, number]>([
+    [6_850_000, 7_200_000, 'remaining', 350_000],
+    [0, 7_000_000, 'remaining', 7_000_000],
+    [7_200_000, 7_200_000, 'exact', 0],
+    [7_300_000, 7_200_000, 'over', 100_000],
+    [7_199_999.5, 7_200_000, 'remaining', 0.5], // 現在値は小数もありうる
+  ])('現在値 %o / 目標値 %o → %o %o', (current, target, kind, amount) => {
+    expect(gapToTarget(current, target)).toEqual({ kind, amount })
   })
 })
 

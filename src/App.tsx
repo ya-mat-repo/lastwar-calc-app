@@ -1,616 +1,81 @@
-import { useDeferredValue, useEffect, useMemo, useState } from 'react'
-import {
-  DAYS,
-  ONE_BY_ONE_HINT,
-  ONE_BY_ONE_TAG,
-  TARGET,
-  groupHeading,
-  groupListTitle,
-  groupTag,
-} from './data'
-import type { DayKey } from './data'
-import { solveDay } from './solver'
-import type { SolveResult } from './solver'
-import {
-  MAX_PRIORITY,
-  MAX_TARGET,
-  RANK_MARK,
-  applyPriorityTap,
-  countRows,
-  findDay,
-  fmt,
-  isModified,
-  labelOf,
-  newItem,
-  parseCurrent,
-  parseNumber,
-  parseTarget,
-  prunePriority,
-  removeGroup,
-  resetDayItems,
-  groupRows,
-  toEditable,
-  toggleGroupSize,
-  toPrepared,
-} from './state'
-import type { EditableDay, EditableGroup, EditableItem, PriorityMap } from './state'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { HOME_HASH, PAGES, documentTitle, pageFromHash } from './pages'
+import type { PageKey } from './pages'
+import Calc from './pages/Calc'
+import Home from './pages/Home'
 
-const STORAGE_KEY = 'lastwar-calc:current'
-const TARGET_STORAGE_KEY = 'lastwar-calc:target'
-const TARGET_HINT_ID = 'target-hint'
-const PANEL_ID = 'day-panel'
+const currentPage = (): PageKey => pageFromHash(window.location.hash)
+const titleOf = (page: PageKey): string => PAGES.find((p) => p.key === page)?.title ?? ''
 
-// サイトデータをブロックした環境やプライベートブラウズでは localStorage への
-// アクセス自体が throw する。保存できなくても計算には影響しないので黙って諦める。
-const load = (key: string): string | null => {
-  try {
-    return localStorage.getItem(key)
-  } catch {
-    return null
-  }
-}
-/** value が null ならキーごと消す */
-const save = (key: string, value: string | null): void => {
-  try {
-    if (value === null) localStorage.removeItem(key)
-    else localStorage.setItem(key, value)
-  } catch {
-    /* 保存できない環境ではメモリ上だけで動かす */
-  }
-}
-const loadRaw = (): string => load(STORAGE_KEY) ?? ''
 /**
- * 目標値の入力欄の初期表示。保存された値が無い・不正なら初期値。
- * 桁の打ち間違いに気づけるよう、桁区切りつきで出す（parseNumber はカンマを無視する）。
+ * URL（ハッシュ）を見てページを出し分ける（SPEC §12.3）。
+ * ページ数が少ないので、ルーティング用のライブラリは使わず hashchange だけを見る。
  */
-const loadTargetRaw = (): string => fmt(parseTarget(load(TARGET_STORAGE_KEY) ?? '').value ?? TARGET)
-
 export default function App() {
-  const [days, setDays] = useState<EditableDay[]>(toEditable)
-  const [dayKey, setDayKey] = useState<DayKey>(DAYS[0].key)
-  const [raw, setRaw] = useState<string>(loadRaw)
-  // 目標値。入力途中（空欄など）も保持したいので文字列で持つ
-  const [targetRaw, setTargetRaw] = useState<string>(loadTargetRaw)
-  // 計算に使う値を先に確認してほしいので、獲得値の一覧は最初から開いておく
-  const [editing, setEditing] = useState(true)
-  // 曜日ごとの「優先して使うアイテム」。値の配列で、先頭が①（最大3件）
-  const [priorities, setPriorities] = useState<PriorityMap>({})
-  const [pickingPriority, setPickingPriority] = useState(false)
+  const [page, setPage] = useState<PageKey>(currentPage)
+  // 一度開いた計算機は、トップページに戻っても外さずに隠しておく。
+  // 外すと獲得値の編集や優先アイテムの選択が消えてしまう（SPEC §12.6）
+  const [calcOpened, setCalcOpened] = useState(page === 'calc')
+  const rootRef = useRef<HTMLDivElement>(null)
+  const firstRender = useRef(true)
 
   useEffect(() => {
-    save(STORAGE_KEY, raw)
-  }, [raw])
+    const onChange = (): void => {
+      const next = currentPage()
+      setPage(next)
+      if (next === 'calc') setCalcOpened(true)
+    }
+    window.addEventListener('hashchange', onChange)
+    return () => window.removeEventListener('hashchange', onChange)
+  }, [])
 
-  const day = findDay(days, dayKey)
-  const { value: current, invalid: currentInvalid } = parseCurrent(raw)
-  const { value: target, invalid: targetInvalid } = parseTarget(targetRaw)
-  const targetChanged = target !== TARGET
+  // 描画の前に済ませる。描画のあとだと、前のページのスクロール位置で1コマ描かれてから先頭に飛ぶ
+  useLayoutEffect(() => {
+    document.title = documentTitle(page)
+    // ページごとに背景（スクロールの外側まで）を変えるための目印
+    document.documentElement.dataset.page = page
 
-  // 保存するのは「初期値から変えた、有効な目標値」だけ。
-  // 初期値のままなら保存しない（保存すると、TARGET を変えても古い値が残り続ける）。
-  // 入力途中の不正な値では触らず、最後に有効だった値を残す。
-  useEffect(() => {
-    if (target === null) return
-    save(TARGET_STORAGE_KEY, target === TARGET ? null : String(target))
-  }, [target])
-
-  // 入力/編集の反応を優先し、重い探索は遅延させる
-  const deferredDays = useDeferredValue(days)
-  const deferredCurrent = useDeferredValue(current)
-  const deferredTarget = useDeferredValue(target)
-  const prepared = useMemo(() => deferredDays.map(toPrepared), [deferredDays])
-  const prep = findDay(prepared, dayKey)
-
-  // 値が編集・削除された優先アイテムは自動的に外れるよう、実在する値だけに絞る
-  const priority = useMemo(
-    () => prunePriority(priorities[dayKey] ?? [], prep.options),
-    [priorities, dayKey, prep],
-  )
-  const deferredPriority = useDeferredValue(priority)
-
-  // 優先チップは獲得値パネルと同じ並びにする。
-  // options は探索の都合で値の降順なので、そのまま出すと編集欄と並びが食い違って探しにくい。
-  const chipOptions = useMemo(
-    () => [...prep.options].sort((a, b) => a.order - b.order),
-    [prep],
-  )
-
-  const result = useMemo(
-    () =>
-      deferredCurrent === null || deferredTarget === null
-        ? null
-        : solveDay(prep, deferredCurrent, deferredTarget, deferredPriority),
-    [prep, deferredCurrent, deferredTarget, deferredPriority],
-  )
-  // 結果カードの「到達」表示は、その結果を計算したときの目標値と比べる
-  // （入力中の目標値と比べると、遅延中の古い結果が一瞬すべて超過に見える）
-  const resultTarget = deferredTarget ?? TARGET
-  // 結果メッセージも結果と同じ遅延した目標値で判定する。入力中の値で判定すると、
-  // 打ち直した直後に「現在値を入力すると…」が一瞬出て、メッセージとカードが食い違う
-  const resultTargetInvalid = deferredTarget === null
-
-  const remaining = current === null || target === null ? null : target - current
-  // まとめて使うと合計が変わる行（チップ宝箱(R) など）。名前は編集後のものを出す
-  const oneByOneLabels = day.items
-    .filter((i) => i.oneByOne)
-    .map((i) => i.label.trim() || '(名称未設定)')
-  const modified = isModified(day)
-
-  const updateDay = (updater: (d: EditableDay) => EditableDay): void =>
-    setDays((prev) => prev.map((d) => (d.key === dayKey ? updater(d) : d)))
-
-  const editItem = (id: string, patch: Partial<EditableItem>): void =>
-    updateDay((d) => ({
-      ...d,
-      items: d.items.map((i) => (i.id === id ? { ...i, ...patch } : i)),
-    }))
-
-  const removeItem = (id: string): void =>
-    updateDay((d) => ({ ...d, items: d.items.filter((i) => i.id !== id) }))
-
-  const addItem = (): void => updateDay((d) => ({ ...d, items: [...d.items, newItem()] }))
-
-  const resetDay = (): void => setDays((prev) => resetDayItems(prev, dayKey))
-
-  /** グループの基準値（1分あたり / 1個あたり）。変えると全サイズが追従する */
-  const editGroupBase = (groupKey: string, raw: string): void =>
-    updateDay((d) => ({
-      ...d,
-      groups: d.groups.map((g) => (g.def.key === groupKey ? { ...g, raw } : g)),
-    }))
-
-  const toggleSize = (groupKey: string, sizeKey: string): void =>
-    updateDay((d) => ({
-      ...d,
-      groups: d.groups.map((g) =>
-        g.def.key === groupKey ? { ...g, enabled: toggleGroupSize(g.enabled, sizeKey) } : g,
-      ),
-    }))
-
-  const removeGroupByKey = (groupKey: string): void =>
-    updateDay((d) => removeGroup(d, groupKey))
-
-  /** タップ順に①②③。選択済みをもう一度押すと外れ、後ろの順位が繰り上がる */
-  const togglePriority = (value: number): void =>
-    setPriorities((prev) => ({
-      ...prev,
-      // 実在しなくなった値を先に落としてから適用する（落とした結果もそのまま保存する）
-      [dayKey]: applyPriorityTap(prev[dayKey] ?? [], value, prep.options),
-    }))
-
-  const clearPriority = (): void => setPriorities((prev) => ({ ...prev, [dayKey]: [] }))
+    // ここから先はページを切り替えたときだけ。最初の表示ではフォーカスを奪わない
+    if (firstRender.current) {
+      firstRender.current = false
+      return
+    }
+    window.scrollTo(0, 0)
+    // フォーカスを新しいページに移す。移さないと、消えた（隠れた）ページに取り残されて、
+    // キーボードやスクリーンリーダーではページが変わったことが分からない
+    rootRef.current
+      ?.querySelector<HTMLElement>('[data-page-root]:not([hidden])')
+      ?.focus({ preventScroll: true })
+  }, [page])
 
   return (
-    <div className="app">
-      <header className="header">
-        <div className="header__bar" />
-        <h1 className="header__title">
-          LAST WAR<span>ぼくのかんがえた　さいきょうの　けいさんき</span>
-        </h1>
-        <div className={'target' + (targetInvalid ? ' target--invalid' : '')}>
-          <label className="target__label" htmlFor="target">
-            目標値
-          </label>
-          <input
-            id="target"
-            className="target__input"
-            type="text"
-            inputMode="numeric"
-            // 桁区切りぶんも含めて収まる幅にする（上限は 99,999,999 の10文字）
-            style={{ width: `${Math.min(Math.max(targetRaw.length, 9), 14)}ch` }}
-            value={targetRaw}
-            aria-invalid={targetInvalid}
-            aria-describedby={TARGET_HINT_ID}
-            onChange={(e) => setTargetRaw(e.target.value)}
-            // 入力を終えたら桁区切りつきに整える（入力中に整えるとカーソルが飛ぶ）
-            onBlur={() => target !== null && setTargetRaw(fmt(target))}
-          />
-          {/* 出したり消したりするとタブ順とレイアウトが動くので、常に置いて無効化で切り替える */}
-          <button
-            className="target__reset"
-            onClick={() => setTargetRaw(fmt(TARGET))}
-            disabled={!targetChanged}
-            aria-label={`目標値を初期値の ${fmt(TARGET)} に戻す`}
-          >
-            ↺
-          </button>
+    <div ref={rootRef}>
+      {page === 'home' && <Home />}
+      {calcOpened && (
+        <div
+          className="page"
+          role="region"
+          aria-label={titleOf('calc')}
+          tabIndex={-1}
+          data-page-root
+          hidden={page !== 'calc'}
+        >
+          <PageBar page="calc" />
+          <Calc />
         </div>
-        <p className="target__hint" id={TARGET_HINT_ID} aria-live="polite">
-          {target === null
-            ? `目標値は 1〜${fmt(MAX_TARGET)} の整数で入力してください`
-            : targetChanged
-              ? `目標値 ${fmt(target)} に変更中（初期値は ${fmt(TARGET)}）`
-              : '目標値はタップして変更できます'}
-        </p>
-      </header>
-
-      <section className="input-card">
-        <label className="input-card__label" htmlFor="current">
-          現在値
-        </label>
-        <input
-          id="current"
-          className={'input-card__input' + (currentInvalid ? ' input-card__input--invalid' : '')}
-          type="text"
-          inputMode="decimal"
-          placeholder="例: 6850000"
-          value={raw}
-          aria-invalid={currentInvalid}
-          onChange={(e) => setRaw(e.target.value)}
-        />
-        <div className="remaining">
-          {currentInvalid ? (
-            <span className="remaining__invalid">0 以上の数値を入力してください</span>
-          ) : targetInvalid ? (
-            <span className="remaining__invalid">目標値を入力してください</span>
-          ) : remaining === null ? (
-            <span className="remaining__idle">現在値を入力してください</span>
-          ) : remaining > 0 ? (
-            <>
-              <span className="remaining__label">目標まで</span>
-              <span className="remaining__value">{fmt(remaining)}</span>
-            </>
-          ) : remaining === 0 ? (
-            <span className="remaining__done">目標値ちょうどです</span>
-          ) : (
-            <>
-              <span className="remaining__label">超過</span>
-              <span className="remaining__over">{fmt(-remaining)}</span>
-            </>
-          )}
-        </div>
-      </section>
-
-      <nav className="tabs" role="tablist" aria-label="曜日">
-        {days.map((d) => (
-          <button
-            key={d.key}
-            id={`tab-${d.key}`}
-            role="tab"
-            aria-selected={d.key === dayKey}
-            aria-controls={PANEL_ID}
-            aria-label={d.name}
-            className={'tab' + (d.key === dayKey ? ' tab--active' : '')}
-            onClick={() => setDayKey(d.key)}
-          >
-            {d.label}
-            {isModified(d) && <i className="tab__dot" aria-label="編集済み" />}
-          </button>
-        ))}
-      </nav>
-
-      <main className="results" id={PANEL_ID} role="tabpanel" aria-labelledby={`tab-${dayKey}`}>
-        <section className="editor">
-          <button className="editor__toggle" onClick={() => setEditing((v) => !v)}>
-            <span className="editor__title">{day.name}の獲得値</span>
-            <span className="editor__count">{countRows(day)}件</span>
-            {modified && <span className="editor__badge">編集済み</span>}
-            <span className="editor__note">※最初に確認してね</span>
-            <span className="editor__caret">{editing ? '▲' : '▼'}</span>
-          </button>
-
-          {editing && (
-            <div className="editor__body">
-              <p className="editor__hint">
-                値は自由に変更できます。変更はこのページ内だけで有効で、リロードすると初期値に戻ります。
-              </p>
-              {oneByOneLabels.length > 0 && (
-                <p className="editor__hint editor__hint--warn" role="note">
-                  ⚠ <strong>{oneByOneLabels.join('・')}</strong> は
-                  <strong>必ず1個ずつ</strong>使ってください。{ONE_BY_ONE_HINT}
-                </p>
-              )}
-
-              {day.groups.map((group) => (
-                <GroupEditor
-                  key={group.def.key}
-                  group={group}
-                  onChangeBase={editGroupBase}
-                  onToggleSize={toggleSize}
-                  onRemove={removeGroupByKey}
-                />
-              ))}
-
-              <ul className="editor__list">
-                {day.items.map((item) => {
-                  const value = parseNumber(item.raw)
-                  const invalid = item.raw.trim() !== '' && (value === null || value <= 0)
-                  return (
-                    <li key={item.id} className="row">
-                      <input
-                        className="row__label"
-                        type="text"
-                        value={item.label}
-                        placeholder="行動名"
-                        aria-label="行動名"
-                        onChange={(e) => editItem(item.id, { label: e.target.value })}
-                      />
-                      <input
-                        className={'row__value' + (invalid ? ' row__value--invalid' : '')}
-                        type="text"
-                        inputMode="decimal"
-                        value={item.raw}
-                        placeholder="0"
-                        aria-label={`${item.label.trim() || '行動'}の獲得値`}
-                        aria-invalid={invalid}
-                        onChange={(e) => editItem(item.id, { raw: e.target.value })}
-                      />
-                      <button
-                        className="row__remove"
-                        onClick={() => removeItem(item.id)}
-                        aria-label={`${item.label.trim() || 'この行'}を削除`}
-                      >
-                        ✕
-                      </button>
-                    </li>
-                  )
-                })}
-              </ul>
-              <div className="editor__actions">
-                <button className="btn" onClick={addItem}>
-                  ＋ 行を追加
-                </button>
-                <button className="btn btn--ghost" onClick={resetDay} disabled={!modified}>
-                  ↺ 初期値に戻す
-                </button>
-              </div>
-            </div>
-          )}
-        </section>
-
-        <section className="priority">
-          <button
-            className="priority__toggle"
-            onClick={() => setPickingPriority((v) => !v)}
-            disabled={prep.options.length === 0}
-          >
-            <span className="editor__title">優先して使うアイテム</span>
-            {priority.length === 0 ? (
-              <span className="editor__count">未選択</span>
-            ) : (
-              <span className="priority__summary">
-                {priority.map((v, i) => (
-                  <span key={v} className="priority__summaryItem">
-                    {RANK_MARK[i]}
-                    {labelOf(prep, v)}
-                  </span>
-                ))}
-              </span>
-            )}
-            <span className="editor__caret">{pickingPriority ? '▲' : '▼'}</span>
-          </button>
-
-          {pickingPriority && (
-            <div className="priority__body">
-              <p className="editor__hint">
-                タップした順に{RANK_MARK.join('')}が付き（最大{MAX_PRIORITY}件）、
-                優先アイテムを多く含むパターンが上位に並びます（{RANK_MARK[0]}ほど重視）。
-                優先外のパターンもその下に表示されます。
-              </p>
-              <div className="chips">
-                {chipOptions.map((o) => {
-                  const rank = priority.indexOf(o.value)
-                  const full = rank < 0 && priority.length >= MAX_PRIORITY
-                  return (
-                    <button
-                      key={o.value}
-                      className={
-                        'chip' + (rank >= 0 ? ' chip--on' : '') + (full ? ' chip--full' : '')
-                      }
-                      onClick={() => togglePriority(o.value)}
-                      aria-pressed={rank >= 0}
-                    >
-                      {rank >= 0 && <i className="chip__rank">{RANK_MARK[rank]}</i>}
-                      <span className="chip__label">{o.labels.join(' / ')}</span>
-                      <span className="chip__value">{fmt(o.value)}</span>
-                    </button>
-                  )
-                })}
-              </div>
-              <div className="editor__actions">
-                <button
-                  className="btn btn--ghost"
-                  onClick={clearPriority}
-                  disabled={priority.length === 0}
-                >
-                  優先指定をクリア
-                </button>
-              </div>
-            </div>
-          )}
-        </section>
-
-        <StatusNotice result={result} day={day} target={resultTarget} targetInvalid={resultTargetInvalid} />
-
-        <PatternList result={result} priority={priority} target={resultTarget} />
-      </main>
-
-      <footer className="footer">
-        表示順:{priority.length > 0 && ' 優先アイテムを多く含む順 →'} 組み合わせる値の種類が少ない順
-        → 合計回数が少ない順（上位20件）
-      </footer>
+      )}
     </div>
   )
 }
 
-/**
- * グループ（加速・結束）の編集。
- * 編集できるのは基準値だけで、各サイズはそこから計算した読み取り専用の値を出す。
- * disabled な入力欄にすると「押せば編集できそう」に見えるので、あえて input にしていない。
- */
-function GroupEditor({
-  group,
-  onChangeBase,
-  onToggleSize,
-  onRemove,
-}: {
-  group: EditableGroup
-  onChangeBase: (groupKey: string, raw: string) => void
-  onToggleSize: (groupKey: string, sizeKey: string) => void
-  onRemove: (groupKey: string) => void
-}) {
-  const def = group.def
-  const rows = groupRows(group)
-  const base = parseNumber(group.raw)
-  const invalid = base === null || base <= 0
-  const baseId = `group-base-${def.key}`
-  const noteId = `${baseId}-note`
-  const heading = groupHeading(def)
-
+/** 各ページ共通のバー（SPEC §12.5）。「← ホーム」とページ名だけを出す */
+function PageBar({ page }: { page: PageKey }) {
   return (
-    <section className="group" data-group={def.key}>
-      <div className="group__head">
-        <span className={'group__tag' + (def.kind === 'bundle' ? ' group__tag--bundle' : '')}>
-          {groupTag(def)}
-        </span>
-        <span className="group__name">{heading}</span>
-        <button
-          className="group__remove"
-          onClick={() => onRemove(def.key)}
-          aria-label={`${heading}を削除`}
-        >
-          ✕
-        </button>
-      </div>
-
-      <div className="group__base">
-        <label className="group__baseLabel" htmlFor={baseId}>
-          基準 {def.unitLabel} =
-        </label>
-        <input
-          id={baseId}
-          className={'group__baseInput' + (invalid ? ' group__baseInput--invalid' : '')}
-          type="text"
-          inputMode="decimal"
-          placeholder="0"
-          value={group.raw}
-          // 同じ曜日に「基準 1個 =」のグループが複数並ぶので、名前で区別できるようにする
-          aria-label={`${def.name}の基準値（${def.unitLabel}あたり）`}
-          aria-invalid={invalid}
-          aria-describedby={noteId}
-          onChange={(e) => onChangeBase(def.key, e.target.value)}
-        />
-      </div>
-      <p className={'group__note' + (invalid ? ' group__note--invalid' : '')} id={noteId}>
-        {invalid
-          ? `${def.unitLabel}あたりの値を入れてください`
-          : '編集できるのはここだけです。ほかのサイズは自動で計算されます。'}
-      </p>
-
-      <p className="group__listTitle">{groupListTitle(def)}</p>
-      <ul className="group__list">
-        {rows.map((row) => (
-          <li key={row.size.key}>
-            <label className={'size' + (row.enabled ? '' : ' size--off')}>
-              <input
-                type="checkbox"
-                className="size__check"
-                checked={row.enabled}
-                onChange={() => onToggleSize(def.key, row.size.key)}
-              />
-              <span className="size__label">{row.size.label}</span>
-              <span className="size__value">{row.value === null ? '—' : fmt(row.value)}</span>
-              <span className="size__formula">
-                {row.size.multiplier === 1
-                  ? '基準'
-                  : `${def.unitLabel} × ${fmt(row.size.multiplier)}`}
-              </span>
-            </label>
-          </li>
-        ))}
-      </ul>
-    </section>
-  )
-}
-
-/** 結果の見出しメッセージ（結果カードの直前に置く） */
-function StatusNotice({
-  result,
-  day,
-  target,
-  targetInvalid,
-}: {
-  result: SolveResult | null
-  day: EditableDay
-  target: number
-  targetInvalid: boolean
-}) {
-  if (targetInvalid) {
-    return <p className="notice notice--warn">目標値を入力すると計算できます。</p>
-  }
-  if (!result) {
-    return <p className="notice">現在値を入力すると、{day.name}の組み合わせを計算します。</p>
-  }
-  switch (result.status) {
-    case 'empty':
-      return <p className="notice notice--warn">{day.name}の獲得値が1件も設定されていません。</p>
-    case 'reached':
-      return <p className="notice notice--ok">すでに目標値ちょうどです。追加は不要です。</p>
-    case 'over':
-      return (
-        <p className="notice notice--warn">現在値が目標値を {fmt(-result.diff)} 超えています。</p>
-      )
-    case 'none':
-      return <p className="notice notice--warn">組み合わせが見つかりませんでした。</p>
-    case 'exact':
-      return <p className="notice notice--ok">ぴったり {fmt(target)} になる組み合わせ</p>
-    case 'over-shoot':
-      return (
-        <p className="notice notice--warn">
-          ぴったり一致する組み合わせが無いため、目標値を超える最も近い値を表示しています
-        </p>
-      )
-  }
-}
-
-function PatternList({
-  result,
-  priority,
-  target,
-}: {
-  result: SolveResult | null
-  priority: readonly number[]
-  target: number
-}) {
-  if (!result || result.patterns.length === 0) return null
-
-  return (
-    <ol className="cards">
-      {result.patterns.map((p, i) => (
-        <li className="card" key={i}>
-          <div className="card__head">
-            <span className="card__rank">#{i + 1}</span>
-            <span className="card__meta">
-              {p.kinds}種 / 計{fmt(p.totalCount)}回
-            </span>
-          </div>
-          <ul className="card__parts">
-            {p.parts.map((part, j) => {
-              const rank = priority.indexOf(part.option.value)
-              return (
-                <li key={j}>
-                  <span className="part__label">
-                    {rank >= 0 && <i className="part__rank">{RANK_MARK[rank]}</i>}
-                    {part.option.labels.join(' / ')}
-                    {part.option.oneByOne && part.count >= 2 && (
-                      <small className="part__note">{ONE_BY_ONE_TAG}</small>
-                    )}
-                  </span>
-                  <span className="part__count">×{fmt(part.count)}</span>
-                  <span className="part__value">{fmt(part.option.value * part.count)}</span>
-                </li>
-              )
-            })}
-          </ul>
-          <div className="card__foot">
-            <span>獲得 {fmt(p.gain)}</span>
-            <span className={p.reached === target ? 'is-exact' : 'is-over'}>
-              到達 {fmt(p.reached)}
-              {p.reached !== target && `（+${fmt(p.reached - target)}）`}
-            </span>
-          </div>
-        </li>
-      ))}
-    </ol>
+    <nav className="pagebar" aria-label="ページ移動">
+      <a className="pagebar__home" href={HOME_HASH}>
+        ← ホーム
+      </a>
+      <span className="pagebar__title">{titleOf(page)}</span>
+    </nav>
   )
 }
