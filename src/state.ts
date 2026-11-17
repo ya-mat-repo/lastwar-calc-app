@@ -16,6 +16,8 @@ export interface EditableItem {
   readonly id: string
   readonly label: string
   readonly raw: string
+  /** 1個ずつ使う必要がある行（初期データから引き継ぐ。行動名や値を編集しても残る） */
+  readonly oneByOne?: boolean
 }
 
 /**
@@ -57,7 +59,12 @@ export const toEditable = (): EditableDay[] =>
     key: d.key,
     label: d.label,
     name: d.name,
-    items: d.items.map((i) => ({ id: uid(), label: i.label, raw: String(i.value) })),
+    items: d.items.map((i) => ({
+      id: uid(),
+      label: i.label,
+      raw: String(i.value),
+      ...(i.oneByOne ? { oneByOne: true } : {}),
+    })),
     groups: (d.groups ?? []).map((g) => ({
       def: g,
       raw: String(g.base),
@@ -152,8 +159,15 @@ export const countRows = (day: EditableDay): number =>
 /** 編集状態 → ソルバー入力。空欄・0・負数・不正な値の行は計算対象から外す */
 export function toPrepared(day: EditableDay): PreparedDay {
   const rows = day.items
-    .map((i) => ({ label: i.label.trim() || '(名称未設定)', value: parseNumber(i.raw) }))
-    .filter((i): i is { label: string; value: number } => i.value !== null && i.value > 0)
+    .map((i) => ({
+      label: i.label.trim() || '(名称未設定)',
+      value: parseNumber(i.raw),
+      oneByOne: i.oneByOne === true,
+    }))
+    .filter(
+      (i): i is { label: string; value: number; oneByOne: boolean } =>
+        i.value !== null && i.value > 0,
+    )
   return prepareDay({ ...day, items: [...groupItems(day.groups), ...rows] })
 }
 

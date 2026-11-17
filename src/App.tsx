@@ -1,5 +1,13 @@
 import { useDeferredValue, useEffect, useMemo, useState } from 'react'
-import { DAYS, TARGET, groupHeading, groupListTitle, groupTag } from './data'
+import {
+  DAYS,
+  ONE_BY_ONE_HINT,
+  ONE_BY_ONE_TAG,
+  TARGET,
+  groupHeading,
+  groupListTitle,
+  groupTag,
+} from './data'
 import type { DayKey } from './data'
 import { solveDay } from './solver'
 import type { SolveResult } from './solver'
@@ -88,6 +96,10 @@ export default function App() {
   )
 
   const remaining = current === null ? null : TARGET - current
+  // まとめて使うと合計が変わる行（チップ宝箱(R) など）。名前は編集後のものを出す
+  const oneByOneLabels = day.items
+    .filter((i) => i.oneByOne)
+    .map((i) => i.label.trim() || '(名称未設定)')
   const modified = isModified(day)
 
   const updateDay = (updater: (d: EditableDay) => EditableDay): void =>
@@ -215,6 +227,12 @@ export default function App() {
               <p className="editor__hint">
                 値は自由に変更できます。変更はこのページ内だけで有効で、リロードすると初期値に戻ります。
               </p>
+              {oneByOneLabels.length > 0 && (
+                <p className="editor__hint editor__hint--warn" role="note">
+                  ⚠ <strong>{oneByOneLabels.join('・')}</strong> は
+                  <strong>必ず1個ずつ</strong>使ってください。{ONE_BY_ONE_HINT}
+                </p>
+              )}
 
               {day.groups.map((group) => (
                 <GroupEditor
@@ -492,6 +510,9 @@ function PatternList({
                   <span className="part__label">
                     {rank >= 0 && <i className="part__rank">{RANK_MARK[rank]}</i>}
                     {part.option.labels.join(' / ')}
+                    {part.option.oneByOne && part.count >= 2 && (
+                      <small className="part__note">{ONE_BY_ONE_TAG}</small>
+                    )}
                   </span>
                   <span className="part__count">×{fmt(part.count)}</span>
                   <span className="part__value">{fmt(part.option.value * part.count)}</span>

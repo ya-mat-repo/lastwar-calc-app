@@ -32,6 +32,8 @@ export interface Option {
   readonly value: number
   /** 同じ値を持つ行動名（複数ありうる） */
   readonly labels: readonly string[]
+  /** まとめて使うと合計が変わるので、1個ずつ使う必要がある行動を含む */
+  readonly oneByOne: boolean
   /**
    * 入力（＝獲得値パネル）に最初に現れた順。
    * options 自体は探索の都合で値の降順に並ぶので、
@@ -157,29 +159,34 @@ function roundToLimit(n: number): number {
 
 /**
  * 曜日データを解きやすい形に前処理する。
- * 値に小数（2812.5 等）があるので 10^n 倍して整数化し、さらに全体の GCD で割って縮小する。
+ * 値に小数（2.5 等）がありうるので 10^n 倍して整数化し、さらに全体の GCD で割って縮小する。
  * 値は編集されうるので、この関数は入力に依存しない純粋関数として毎回呼び直してよい。
  */
 export function prepareDay(day: DaySource): PreparedDay {
-  const byValue = new Map<number, string[]>()
+  const byValue = new Map<number, { labels: string[]; oneByOne: boolean }>()
   for (const item of day.items) {
     if (!Number.isFinite(item.value)) continue
     // 5桁以上の小数はここで 4 桁に丸める。以降 value と scaled は必ず整合する。
     // 丸めて 0 以下になる極小値（0.00001 など）はここで落ちる
     const value = roundToLimit(item.value)
     if (value <= 0) continue
-    const labels = byValue.get(value)
-    if (labels) labels.push(item.label)
-    else byValue.set(value, [item.label])
+    const entry = byValue.get(value)
+    if (entry) {
+      entry.labels.push(item.label)
+      entry.oneByOne ||= item.oneByOne === true
+    } else {
+      byValue.set(value, { labels: [item.label], oneByOne: item.oneByOne === true })
+    }
   }
 
   const scaleFactor = 10 ** Math.max(0, ...[...byValue.keys()].map(decimalPlaces))
 
   // Map は挿入順を保つので、entries の並び＝獲得値パネルの並び
   const scaled = [...byValue.entries()]
-    .map(([value, labels], order) => ({
+    .map(([value, { labels, oneByOne }], order) => ({
       value,
       labels,
+      oneByOne,
       order,
       scaled: Math.round(value * scaleFactor),
     }))
@@ -394,9 +401,14 @@ export function solveDay(
   const startScaled = isIntegral ? scaledDiff : Math.ceil(rawScaled)
   const start = Math.max(1, Math.ceil(startScaled / unitScale))
   const guaranteed = Math.min(...options.map((o) => Math.ceil(start / o.unit) * o.unit))
-  const limit = Math.min(start + MAX_OVERSHOOT_STEPS, guaranteed)
+  // どのパターンも選択肢を最低1回は使うので、最小の選択肢より小さい到達値は作れない。
+  // GCD の刻みが最小の獲得値よりずっと細かいとき（月曜: 刻み 0.5 に対し最小 2,813）、
+  // ここから始めないと到達しようのない値を数千ステップ走査することになる。
+  const minUnit = options[options.length - 1].unit
+  const from = Math.max(start, minUnit)
+  const limit = Math.min(from + MAX_OVERSHOOT_STEPS, guaranteed)
 
-  for (let unitTarget = start; unitTarget <= limit; unitTarget++) {
+  for (let unitTarget = from; unitTarget <= limit; unitTarget++) {
     const patterns = collectPatterns(unitTarget, prep, MAX_RESULTS, budget, weights)
     if (patterns.length > 0) {
       return { status: 'over-shoot', diff, patterns: decorate(patterns, current) }

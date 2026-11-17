@@ -359,7 +359,9 @@ describe('solveDay: 並び順の契約', () => {
 
   it('優先アイテムを含むパターンが必ず先頭に来る', () => {
     const day = prepDay(DAYS[0])
-    const target = 2812.5 // チップ宝箱(R)開封（かけらが結束単位だけになり、これが月曜の最小値）
+    // 不足 350,000 をこの値だけで作れる（×14）。
+    // 最小値の 2,813 は他の値と互いに素で 350,000 を作る組み合わせに入れないので使わない
+    const target = 25000 // SR英雄かけら10枚消費
     expect(day.options.some((o) => o.value === target)).toBe(true)
     const r = solveDay(day, 6_850_000, TARGET, [target])
     expect(r.patterns[0].parts.some((x) => x.option.value === target)).toBe(true)
@@ -419,7 +421,7 @@ describe('solveDay: 実データ（月〜金）の不変条件', () => {
   it('月曜 7,199,999 はぴったり作れず、最小超過は チップ宝箱(R)×1', () => {
     const r = solveDay(prepDay(DAYS[0]), 7_199_999, TARGET)
     expect(r.status).toBe('over-shoot')
-    expect(r.patterns[0].reached).toBe(7_199_999 + 2812.5)
+    expect(r.patterns[0].reached).toBe(7_199_999 + 2813)
   })
 })
 
@@ -585,7 +587,7 @@ describe('solveDay: 回帰（レビュー指摘の修正）', () => {
   it('#1 月曜（scaleFactor=10）でも同様（7,199,999.99）', () => {
     const r = solveDay(prepDay(DAYS[0]), 7_199_999.99, TARGET)
     expect(r.status).toBe('over-shoot')
-    expect(shape(r.patterns[0])).toMatchObject({ values: [2812.5], counts: [1] })
+    expect(shape(r.patterns[0])).toMatchObject({ values: [2813], counts: [1] })
   })
 
   it('#4 不足額の端数を切り捨てて目標を下回る解を返さない（木曜 7,197,499.75）', () => {
@@ -594,8 +596,8 @@ describe('solveDay: 回帰（レビュー指摘の修正）', () => {
     const current = 7_197_499.75
     const r = solveDay(prepDay(DAYS[3]), current, TARGET)
     expect(r.status).toBe('over-shoot')
-    expect(shape(r.patterns[0])).toMatchObject({ values: [4200], counts: [1] })
-    expect(r.patterns[0].reached).toBeCloseTo(7_201_699.75, 6)
+    expect(shape(r.patterns[0])).toMatchObject({ values: [4500], counts: [1] })
+    expect(r.patterns[0].reached).toBeCloseTo(7_201_999.75, 6)
     expect(r.patterns.every((p) => p.reached >= TARGET)).toBe(true)
   })
 
@@ -607,10 +609,65 @@ describe('solveDay: 回帰（レビュー指摘の修正）', () => {
   })
 
   it('#4 丸め誤差レベルのズレは今までどおり ぴったり と判定する', () => {
-    // 7,200,000 - 2812.5 は浮動小数の再計算で微小な誤差が出るが exact のまま
-    const r = solveDay(prepDay(DAYS[0]), TARGET - 2812.5, TARGET)
+    // 7,200,000 - 14062.5 は浮動小数の再計算で微小な誤差が出るが exact のまま
+    // （実データから小数の獲得値が無くなったので、仮の値で確認する）
+    const r = solveDay(prep([25000, 14062.5, 3750]), TARGET - 14062.5, TARGET)
     expect(r.status).toBe('exact')
     expect(r.patterns[0].reached).toBe(TARGET)
+  })
+
+  // 実機での報告: 現在値 4,346,250 に UR30枚×3 + SSR20枚×3 + チップ宝箱(R)×28 を足したら
+  // アプリの表示は 7,200,000 ちょうどなのに、実際は 7,200,014 になった。
+  // 原因は チップ宝箱(R) の 2,812.5 で、ゲーム側は1回の使用ごとに切り上げて
+  // 整数（2,813）で付与している。0.5 × 28回 = 14。獲得値を整数にして解消した。
+  // まとめて使うと合計に対して1回だけ切り上げるので（10個で 28,125）、1個ずつ使う前提の値。
+  it('#5 チップ宝箱(R)開封 は整数の 2,813（小数だと使用回数ぶんズレる）', () => {
+    const box = DAYS[0].items.find((i) => i.label === 'チップ宝箱(R)開封')
+    expect(box?.value).toBe(2813)
+    expect(2813 * 28).toBe(78_764) // 2812.5 なら 78,750 で 14 少ない
+  })
+
+  it('#5 チップ宝箱(SR)開封 も1個ずつ使ったときの 14,063', () => {
+    const box = DAYS[0].items.find((i) => i.label === 'チップ宝箱(SR)開封')
+    expect(box?.value).toBe(14063)
+  })
+
+  it('#5 実データの獲得値はすべて整数', () => {
+    const frac = DAYS.flatMap(expandDayItems).filter((i) => !Number.isInteger(i.value))
+    expect(frac.map((i) => i.label)).toEqual([])
+  })
+
+  it('#5 1個ずつ使う必要があるのは チップ宝箱(R) と (SR) だけ', () => {
+    const flagged = DAYS.flatMap((d) => d.items).filter((i) => i.oneByOne)
+    expect(flagged.map((i) => i.label)).toEqual(['チップ宝箱(R)開封', 'チップ宝箱(SR)開封'])
+    // 選択肢にも引き継がれる
+    const day = prepDay(DAYS[0])
+    expect(day.options.filter((o) => o.oneByOne).map((o) => o.value)).toEqual([14063, 2813])
+  })
+
+  it('#5 同じ値にまとまった選択肢は、1件でも該当すれば oneByOne になる', () => {
+    const p = prepareDay({
+      key: 'x',
+      name: 'テスト',
+      items: [
+        { label: 'a', value: 100 },
+        { label: 'b', value: 100, oneByOne: true },
+        { label: 'c', value: 300 },
+      ],
+    })
+    expect(p.options.map((o) => [o.value, o.oneByOne])).toEqual([
+      [300, false],
+      [100, true],
+    ])
+  })
+
+  it('#5 報告のあった現在値 4,346,250 では、端数の出ない組み合わせだけを出す', () => {
+    const r = solveDay(prepDay(DAYS[0]), 4_346_250, TARGET)
+    expect(r.status).toBe('exact')
+    for (const p of r.patterns) {
+      expect(p.reached).toBe(TARGET)
+      expect(Number.isInteger(p.gain)).toBe(true)
+    }
   })
 
   it('#3 極小値の行があっても他の値で解が返る（150 + 0.00001）', () => {
@@ -687,18 +744,21 @@ describe('solveDay: 境界と異常系', () => {
   })
 
   it('現在値・獲得値に小数が入ってもぴったり一致を見つけられる', () => {
-    // 不足 2812.5 ＝ チップ宝箱(R)開封 ×1 ちょうど
-    const r = solveDay(day, TARGET - 2812.5, TARGET)
+    // 不足 14062.5 ＝ 小数の値 ×1 ちょうど（実データに小数は無いので仮の値）
+    const r = solveDay(prep([25000, 14062.5, 3750]), TARGET - 14062.5, TARGET)
     expect(r.status).toBe('exact')
-    expect(shape(r.patterns[0])).toMatchObject({ values: [2812.5], counts: [1] })
+    expect(shape(r.patterns[0])).toMatchObject({ values: [14062.5], counts: [1] })
     expect(r.patterns[0].reached).toBe(TARGET)
   })
 
+  // §5.5: 最小の獲得値より小さい到達値は作れないので、そこまで走査を飛ばす。
+  // 月曜は刻み 1 に対して最小の獲得値が 2,813 なので、飛ばさないと
+  // 到達しようのない値を 2,800 ステップあまり走査することになる。
   it('刻み（GCD）と一致するだけでは作れない不足額は超過側に回る', () => {
-    // 月曜の刻みは 312.5 だが、最小の獲得値は 2812.5 なので 312.5 ちょうどは作れない
-    const r = solveDay(day, TARGET - 312.5, TARGET)
+    expect(day.unitScale / day.scaleFactor).toBe(1) // 月曜の刻み
+    const r = solveDay(day, TARGET - 1, TARGET)
     expect(r.status).toBe('over-shoot')
-    expect(r.patterns[0].reached).toBe(TARGET - 312.5 + 2812.5)
+    expect(r.patterns[0].reached).toBe(TARGET - 1 + 2813)
   })
 
   // §5.5 / §9-2: 走査が MAX_OVERSHOOT_STEPS(5000) に達しても
@@ -717,9 +777,24 @@ describe('solveDay: 境界と異常系', () => {
 
   it('選択肢が多い曜日でも実用的な速度で返る', () => {
     const fri = prepDay(DAYS[4])
-    const priority = fri.options.slice(0, 3).map((o) => o.value)
+    const priority = fri.options.slice(0, 5).map((o) => o.value)
     const t0 = performance.now()
     solveDay(fri, 6_850_000, TARGET, priority)
     expect(performance.now() - t0).toBeLessThan(1000)
+  })
+
+  // §5.5: 超過探索は「最小の獲得値」から始める。飛ばさないと月曜
+  // （刻み 1 に対して最小の獲得値が 2,813）で、到達しようのない値を
+  // 数千ステップ走査することになる（刻みが 0.5 だったときは 170ms 超かかっていた）。
+  it('刻みが最小の獲得値よりずっと細かくても、超過探索が重くならない', () => {
+    const day = prepDay(DAYS[0])
+    expect(day.unitScale / day.scaleFactor).toBe(1)
+    expect(day.options[day.options.length - 1].value).toBe(2813)
+
+    solveDay(day, 7_199_999, TARGET) // ウォームアップ（初回は JIT のぶん遅い）
+    const t0 = performance.now()
+    const r = solveDay(day, 7_199_999, TARGET)
+    expect(performance.now() - t0).toBeLessThan(100)
+    expect(r.patterns[0].reached).toBe(7_199_999 + 2813)
   })
 })

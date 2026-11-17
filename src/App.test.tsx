@@ -678,3 +678,46 @@ describe('App: アクセシビリティの配線', () => {
     )
   })
 })
+
+describe('App: 1個ずつ使うアイテムの注意', () => {
+  const HINT = /必ず1個ずつ/
+
+  it('月曜の獲得値パネルに、チップ宝箱(R)・(SR) を1個ずつ使う注意が出る', () => {
+    render(<App />)
+    const note = screen.getByRole('note')
+    expect(note.textContent).toMatch(HINT)
+    expect(note.textContent).toContain('チップ宝箱(R)開封・チップ宝箱(SR)開封')
+    expect(note.textContent).toContain('28,130')
+    expect(note.textContent).toContain('28,125')
+  })
+
+  it('該当アイテムの無い曜日には出ない', () => {
+    render(<App />)
+    fireEvent.click(screen.getByRole('tab', { name: '火曜日' }))
+    expect(screen.queryByRole('note')).toBeNull()
+  })
+
+  it('結果カードでは、2回以上使う行にだけ注意が付く', async () => {
+    const { container } = render(<App />)
+
+    // 不足 5,626 ＝ チップ宝箱(R) ×2
+    typeCurrent(String(TARGET - 2813 * 2))
+    await waitFor(() => expect(cards(container).length).toBeGreaterThan(0))
+    const first = cards(container)[0]
+    expect(within(first).getByText(/チップ宝箱\(R\)開封/)).toBeTruthy()
+    expect(within(first).getByText('×2')).toBeTruthy()
+    expect(first.querySelector('.part__note')?.textContent).toMatch(/1個ずつ使う/)
+
+    // 不足 2,813 ＝ チップ宝箱(R) ×1 なら、まとめて使う余地が無いので出さない
+    typeCurrent(String(TARGET - 2813))
+    await waitFor(() => expect(within(cards(container)[0]).getByText('×1')).toBeTruthy())
+    expect(cards(container)[0].querySelector('.part__note')).toBeNull()
+  })
+
+  it('かけらなど該当しない行には付かない', async () => {
+    const { container } = render(<App />)
+    typeCurrent('6850000')
+    await waitFor(() => expect(cards(container)).toHaveLength(20))
+    expect(cards(container)[0].querySelector('.part__note')).toBeNull()
+  })
+})

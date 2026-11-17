@@ -6,7 +6,20 @@ export type DayKey = 'mon' | 'tue' | 'wed' | 'thu' | 'fri'
 export interface DayItem {
   readonly label: string
   readonly value: number
+  /**
+   * まとめて使うと合計が変わるので、1個ずつ使う必要があるアイテム。
+   * 画面に「1個ずつ使ってください」の注意を出す（SPEC §8-12）。
+   */
+  readonly oneByOne?: boolean
 }
+
+/** 1個ずつ使う必要があるアイテムについての注意書き（編集パネルに出す） */
+export const ONE_BY_ONE_HINT =
+  'まとめて使うと端数の扱いが変わり、合計がズレます' +
+  '（例: チップ宝箱(R) 10個 → 1個ずつなら 28,130、まとめて使うと 28,125）。'
+
+/** 結果カードで、該当アイテムを2回以上使う行に付ける注意 */
+export const ONE_BY_ONE_TAG = '⚠ 1個ずつ使う（まとめて使うとズレる）'
 
 /**
  * 基準値に倍率を掛けて求めるグループの種別。
@@ -180,8 +193,12 @@ export const DAYS: readonly Day[] = [
     items: [
       { label: '10APを消費（野良ゾンビ倒す）', value: 3750 },
       { label: '20APを消費（終末精鋭集結）', value: 7500 },
-      { label: 'チップ宝箱(R)開封', value: 2812.5 },
-      { label: 'チップ宝箱(SR)開封', value: 14062.5 },
+      // 原典は 2812.5 / 14062.5 だが、ゲームは1回の使用ごとに端数を切り上げて整数で付与する。
+      // 1個ずつ使うと 2813 / 14063、10個まとめて使うと 28125 / 140625 になり結果が変わる
+      // （実測: チップ宝箱(R) を 28 回使って、2812.5 換算より +14 多かった）。
+      // アプリは「1個ずつ使う」前提の値で計算し、画面でもそう促す（oneByOne）。
+      { label: 'チップ宝箱(R)開封', value: 2813, oneByOne: true },
+      { label: 'チップ宝箱(SR)開封', value: 14063, oneByOne: true },
       { label: 'チップ宝箱(SSR)開封', value: 84375 },
       { label: 'チップ宝箱(UR)開封', value: 281250 },
     ],
@@ -254,7 +271,7 @@ export const DAYS: readonly Day[] = [
       shardGroup('ssr', 'SSR英雄かけら', 8750),
       shardGroup('sr', 'SR英雄かけら', 2500),
     ],
-    items: [{ label: '英雄募集1回', value: 4200 }],
+    items: [{ label: '英雄募集1回', value: 4500 }],
   },
   {
     key: 'fri',

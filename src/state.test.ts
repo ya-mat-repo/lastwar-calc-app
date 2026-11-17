@@ -121,6 +121,23 @@ describe('toPrepared', () => {
   })
 })
 
+describe('toPrepared: 1個ずつ使う行', () => {
+  it('行動名や値を編集しても oneByOne は選択肢に引き継がれる', () => {
+    const mon = toEditable()[0]
+    const edited = {
+      ...mon,
+      items: mon.items.map((i) => (i.oneByOne ? { ...i, label: '宝箱', raw: '999' } : i)),
+    }
+    const p = toPrepared(edited)
+    expect(p.options.filter((o) => o.oneByOne).map((o) => o.value)).toEqual([999])
+  })
+
+  it('グループや印の無い行は oneByOne にならない', () => {
+    const tue = toPrepared(toEditable()[1])
+    expect(tue.options.some((o) => o.oneByOne)).toBe(false)
+  })
+})
+
 describe('labelOf', () => {
   const prep = toPrepared({
     key: 'mon',
@@ -596,7 +613,18 @@ describe('toEditable', () => {
   it('仕様書の全曜日ぶんを文字列の値で作る', () => {
     const days = toEditable()
     expect(days.map((d) => d.key)).toEqual(DAYS.map((d) => d.key))
-    expect(days[0].items[2]).toMatchObject({ label: 'チップ宝箱(R)開封', raw: '2812.5' })
+    expect(days[0].items[2]).toMatchObject({
+      label: 'チップ宝箱(R)開封',
+      raw: '2813',
+      oneByOne: true,
+    })
+    expect(days[0].items[3]).toMatchObject({
+      label: 'チップ宝箱(SR)開封',
+      raw: '14063',
+      oneByOne: true,
+    })
+    // 印が付くのはこの2行だけ
+    expect(days.flatMap((d) => d.items).filter((i) => i.oneByOne)).toHaveLength(2)
     expect(days.flatMap((d) => d.items).every((i) => typeof i.raw === 'string')).toBe(true)
   })
 

@@ -292,6 +292,13 @@ body {
   overflow-wrap: anywhere;
 }
 
+.part__note {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--gold);
+}
+
 .part__count {
   font-weight: 800;
   color: var(--gold);
@@ -396,6 +403,18 @@ body {
   line-height: 1.6;
   color: var(--muted);
   margin-bottom: 10px;
+}
+
+.editor__hint--warn {
+  padding: 8px 10px;
+  color: var(--text);
+  background: rgba(245, 196, 81, 0.08);
+  border: 1px solid var(--gold-dim);
+  border-radius: 6px;
+}
+
+.editor__hint--warn strong {
+  color: var(--gold);
 }
 
 .editor__list {
