@@ -110,6 +110,23 @@ export function parseCurrent(raw: string): { value: number | null; invalid: bool
   return { value: n, invalid: false }
 }
 
+/** 目標値の上限（8桁）。桁の打ち間違いを弾くためのもので、探索はこの範囲で実用的な速度で返る */
+export const MAX_TARGET = 99_999_999
+
+/**
+ * 目標値の入力を解釈する。
+ * 受け付けるのは 1〜MAX_TARGET の整数だけで、それ以外は入力ミス（value: null）として返す。
+ * - ゲームのポイントは整数なので、小数の目標値はどう組み合わせても作れない
+ * - 現在値と違い「未入力」の状態は無い（初期値 TARGET が入っている）ので、空欄も invalid にする
+ */
+export function parseTarget(raw: string): { value: number | null; invalid: boolean } {
+  const n = parseNumber(raw)
+  if (n === null || !Number.isInteger(n) || n <= 0 || n > MAX_TARGET) {
+    return { value: null, invalid: true }
+  }
+  return { value: n, invalid: false }
+}
+
 /** グループの1行ぶんの表示データ */
 export interface GroupRow {
   readonly size: GroupSize

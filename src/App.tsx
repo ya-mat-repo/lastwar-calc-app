@@ -13,6 +13,7 @@ import { solveDay } from './solver'
 import type { SolveResult } from './solver'
 import {
   MAX_PRIORITY,
+  MAX_TARGET,
   RANK_MARK,
   applyPriorityTap,
   countRows,
@@ -23,6 +24,7 @@ import {
   newItem,
   parseCurrent,
   parseNumber,
+  parseTarget,
   prunePriority,
   removeGroup,
   resetDayItems,
@@ -34,29 +36,41 @@ import {
 import type { EditableDay, EditableGroup, EditableItem, PriorityMap } from './state'
 
 const STORAGE_KEY = 'lastwar-calc:current'
+const TARGET_STORAGE_KEY = 'lastwar-calc:target'
+const TARGET_HINT_ID = 'target-hint'
 const PANEL_ID = 'day-panel'
 
 // サイトデータをブロックした環境やプライベートブラウズでは localStorage への
 // アクセス自体が throw する。保存できなくても計算には影響しないので黙って諦める。
-const loadRaw = (): string => {
+const load = (key: string): string | null => {
   try {
-    return localStorage.getItem(STORAGE_KEY) ?? ''
+    return localStorage.getItem(key)
   } catch {
-    return ''
+    return null
   }
 }
-const saveRaw = (value: string): void => {
+/** value が null ならキーごと消す */
+const save = (key: string, value: string | null): void => {
   try {
-    localStorage.setItem(STORAGE_KEY, value)
+    if (value === null) localStorage.removeItem(key)
+    else localStorage.setItem(key, value)
   } catch {
     /* 保存できない環境ではメモリ上だけで動かす */
   }
 }
+const loadRaw = (): string => load(STORAGE_KEY) ?? ''
+/**
+ * 目標値の入力欄の初期表示。保存された値が無い・不正なら初期値。
+ * 桁の打ち間違いに気づけるよう、桁区切りつきで出す（parseNumber はカンマを無視する）。
+ */
+const loadTargetRaw = (): string => fmt(parseTarget(load(TARGET_STORAGE_KEY) ?? '').value ?? TARGET)
 
 export default function App() {
   const [days, setDays] = useState<EditableDay[]>(toEditable)
   const [dayKey, setDayKey] = useState<DayKey>(DAYS[0].key)
   const [raw, setRaw] = useState<string>(loadRaw)
+  // 目標値。入力途中（空欄など）も保持したいので文字列で持つ
+  const [targetRaw, setTargetRaw] = useState<string>(loadTargetRaw)
   // 計算に使う値を先に確認してほしいので、獲得値の一覧は最初から開いておく
   const [editing, setEditing] = useState(true)
   // 曜日ごとの「優先して使うアイテム」。値の配列で、先頭が①（最大3件）
@@ -64,15 +78,26 @@ export default function App() {
   const [pickingPriority, setPickingPriority] = useState(false)
 
   useEffect(() => {
-    saveRaw(raw)
+    save(STORAGE_KEY, raw)
   }, [raw])
 
   const day = findDay(days, dayKey)
   const { value: current, invalid: currentInvalid } = parseCurrent(raw)
+  const { value: target, invalid: targetInvalid } = parseTarget(targetRaw)
+  const targetChanged = target !== TARGET
+
+  // 保存するのは「初期値から変えた、有効な目標値」だけ。
+  // 初期値のままなら保存しない（保存すると、TARGET を変えても古い値が残り続ける）。
+  // 入力途中の不正な値では触らず、最後に有効だった値を残す。
+  useEffect(() => {
+    if (target === null) return
+    save(TARGET_STORAGE_KEY, target === TARGET ? null : String(target))
+  }, [target])
 
   // 入力/編集の反応を優先し、重い探索は遅延させる
   const deferredDays = useDeferredValue(days)
   const deferredCurrent = useDeferredValue(current)
+  const deferredTarget = useDeferredValue(target)
   const prepared = useMemo(() => deferredDays.map(toPrepared), [deferredDays])
   const prep = findDay(prepared, dayKey)
 
@@ -91,11 +116,20 @@ export default function App() {
   )
 
   const result = useMemo(
-    () => (deferredCurrent === null ? null : solveDay(prep, deferredCurrent, TARGET, deferredPriority)),
-    [prep, deferredCurrent, deferredPriority],
+    () =>
+      deferredCurrent === null || deferredTarget === null
+        ? null
+        : solveDay(prep, deferredCurrent, deferredTarget, deferredPriority),
+    [prep, deferredCurrent, deferredTarget, deferredPriority],
   )
+  // 結果カードの「到達」表示は、その結果を計算したときの目標値と比べる
+  // （入力中の目標値と比べると、遅延中の古い結果が一瞬すべて超過に見える）
+  const resultTarget = deferredTarget ?? TARGET
+  // 結果メッセージも結果と同じ遅延した目標値で判定する。入力中の値で判定すると、
+  // 打ち直した直後に「現在値を入力すると…」が一瞬出て、メッセージとカードが食い違う
+  const resultTargetInvalid = deferredTarget === null
 
-  const remaining = current === null ? null : TARGET - current
+  const remaining = current === null || target === null ? null : target - current
   // まとめて使うと合計が変わる行（チップ宝箱(R) など）。名前は編集後のものを出す
   const oneByOneLabels = day.items
     .filter((i) => i.oneByOne)
@@ -153,10 +187,41 @@ export default function App() {
         <h1 className="header__title">
           LAST WAR<span>ぼくのかんがえた　さいきょうの　けいさんき</span>
         </h1>
-        <div className="target">
-          <span className="target__label">目標値</span>
-          <span className="target__value">{fmt(TARGET)}</span>
+        <div className={'target' + (targetInvalid ? ' target--invalid' : '')}>
+          <label className="target__label" htmlFor="target">
+            目標値
+          </label>
+          <input
+            id="target"
+            className="target__input"
+            type="text"
+            inputMode="numeric"
+            // 桁区切りぶんも含めて収まる幅にする（上限は 99,999,999 の10文字）
+            style={{ width: `${Math.min(Math.max(targetRaw.length, 9), 14)}ch` }}
+            value={targetRaw}
+            aria-invalid={targetInvalid}
+            aria-describedby={TARGET_HINT_ID}
+            onChange={(e) => setTargetRaw(e.target.value)}
+            // 入力を終えたら桁区切りつきに整える（入力中に整えるとカーソルが飛ぶ）
+            onBlur={() => target !== null && setTargetRaw(fmt(target))}
+          />
+          {/* 出したり消したりするとタブ順とレイアウトが動くので、常に置いて無効化で切り替える */}
+          <button
+            className="target__reset"
+            onClick={() => setTargetRaw(fmt(TARGET))}
+            disabled={!targetChanged}
+            aria-label={`目標値を初期値の ${fmt(TARGET)} に戻す`}
+          >
+            ↺
+          </button>
         </div>
+        <p className="target__hint" id={TARGET_HINT_ID} aria-live="polite">
+          {target === null
+            ? `目標値は 1〜${fmt(MAX_TARGET)} の整数で入力してください`
+            : targetChanged
+              ? `目標値 ${fmt(target)} に変更中（初期値は ${fmt(TARGET)}）`
+              : '目標値はタップして変更できます'}
+        </p>
       </header>
 
       <section className="input-card">
@@ -176,6 +241,8 @@ export default function App() {
         <div className="remaining">
           {currentInvalid ? (
             <span className="remaining__invalid">0 以上の数値を入力してください</span>
+          ) : targetInvalid ? (
+            <span className="remaining__invalid">目標値を入力してください</span>
           ) : remaining === null ? (
             <span className="remaining__idle">現在値を入力してください</span>
           ) : remaining > 0 ? (
@@ -353,9 +420,9 @@ export default function App() {
           )}
         </section>
 
-        <StatusNotice result={result} day={day} />
+        <StatusNotice result={result} day={day} target={resultTarget} targetInvalid={resultTargetInvalid} />
 
-        <PatternList result={result} priority={priority} />
+        <PatternList result={result} priority={priority} target={resultTarget} />
       </main>
 
       <footer className="footer">
@@ -457,7 +524,20 @@ function GroupEditor({
 }
 
 /** 結果の見出しメッセージ（結果カードの直前に置く） */
-function StatusNotice({ result, day }: { result: SolveResult | null; day: EditableDay }) {
+function StatusNotice({
+  result,
+  day,
+  target,
+  targetInvalid,
+}: {
+  result: SolveResult | null
+  day: EditableDay
+  target: number
+  targetInvalid: boolean
+}) {
+  if (targetInvalid) {
+    return <p className="notice notice--warn">目標値を入力すると計算できます。</p>
+  }
   if (!result) {
     return <p className="notice">現在値を入力すると、{day.name}の組み合わせを計算します。</p>
   }
@@ -473,7 +553,7 @@ function StatusNotice({ result, day }: { result: SolveResult | null; day: Editab
     case 'none':
       return <p className="notice notice--warn">組み合わせが見つかりませんでした。</p>
     case 'exact':
-      return <p className="notice notice--ok">ぴったり {fmt(TARGET)} になる組み合わせ</p>
+      return <p className="notice notice--ok">ぴったり {fmt(target)} になる組み合わせ</p>
     case 'over-shoot':
       return (
         <p className="notice notice--warn">
@@ -486,9 +566,11 @@ function StatusNotice({ result, day }: { result: SolveResult | null; day: Editab
 function PatternList({
   result,
   priority,
+  target,
 }: {
   result: SolveResult | null
   priority: readonly number[]
+  target: number
 }) {
   if (!result || result.patterns.length === 0) return null
 
@@ -522,9 +604,9 @@ function PatternList({
           </ul>
           <div className="card__foot">
             <span>獲得 {fmt(p.gain)}</span>
-            <span className={p.reached === TARGET ? 'is-exact' : 'is-over'}>
+            <span className={p.reached === target ? 'is-exact' : 'is-over'}>
               到達 {fmt(p.reached)}
-              {p.reached !== TARGET && `（+${fmt(p.reached - TARGET)}）`}
+              {p.reached !== target && `（+${fmt(p.reached - target)}）`}
             </span>
           </div>
         </li>

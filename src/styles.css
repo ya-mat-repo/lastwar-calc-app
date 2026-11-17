@@ -88,11 +88,74 @@ body {
   letter-spacing: 0.1em;
 }
 
-.target__value {
+/* 目標値の入力欄。ピルの中に溶け込ませ、下線で「編集できる」ことを示す。
+   16px 未満にすると iOS がフォーカス時に画面を拡大するので 17px のまま */
+.target__input {
+  /* 幅は桁数に合わせて style で指定する */
+  max-width: 100%;
+  min-width: 0;
+  padding: 2px 0;
+  font: inherit;
   font-size: 17px;
   font-weight: 800;
-  color: var(--gold);
   font-variant-numeric: tabular-nums;
+  text-align: center;
+  color: var(--gold);
+  background: transparent;
+  border: none;
+  border-bottom: 1px dashed var(--gold-dim);
+  border-radius: 0;
+  outline: none;
+}
+
+.target__input:focus {
+  border-bottom: 1px solid var(--gold);
+}
+
+.target:focus-within {
+  border-color: var(--gold);
+  box-shadow: 0 0 0 3px rgba(245, 196, 81, 0.15);
+}
+
+.target--invalid,
+.target--invalid:focus-within {
+  border-color: var(--red);
+  box-shadow: none;
+}
+
+.target--invalid .target__input {
+  color: var(--red);
+  border-bottom-color: var(--red);
+}
+
+.target__reset {
+  align-self: center;
+  width: 28px;
+  height: 28px;
+  font-size: 15px;
+  line-height: 1;
+  color: var(--gold);
+  background: transparent;
+  border: 1px solid var(--gold-dim);
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.target__reset:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.target__hint {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--muted);
+  min-height: 17px;
+}
+
+.target--invalid + .target__hint {
+  color: var(--red);
+  font-weight: 700;
 }
 
 /* ---------- input ---------- */

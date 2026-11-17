@@ -52,7 +52,7 @@ const chipLabels = (panel: HTMLElement): string[] =>
 describe('App: 基本の流れ', () => {
   it('初期表示では目標値だけ出ていて、結果は出ない', () => {
     const { container } = render(<App />)
-    expect(screen.getByText(TARGET.toLocaleString('ja-JP'))).toBeTruthy()
+    expect(screen.getByLabelText('目標値')).toHaveProperty('value', TARGET.toLocaleString('ja-JP'))
     expect(screen.getByText('現在値を入力してください')).toBeTruthy()
     expect(cards(container)).toHaveLength(0)
   })
@@ -94,7 +94,7 @@ describe('App: 基本の流れ', () => {
     expect(await screen.findByText(/ぴったり/)).toBeTruthy()
   })
 
-  it('現在値だけ localStorage に保存され、再マウントで復元される', async () => {
+  it('現在値は localStorage に保存され、再マウントで復元される', async () => {
     const first = render(<App />)
     typeCurrent('6850000')
     await waitFor(() => expect(localStorage.getItem('lastwar-calc:current')).toBe('6850000'))
@@ -720,4 +720,154 @@ describe('App: 1個ずつ使うアイテムの注意', () => {
     await waitFor(() => expect(cards(container)).toHaveLength(20))
     expect(cards(container)[0].querySelector('.part__note')).toBeNull()
   })
+})
+
+describe('App: 目標値の編集', () => {
+  const KEY = 'lastwar-calc:target'
+  const input = (): HTMLInputElement => screen.getByLabelText('目標値') as HTMLInputElement
+  const typeTarget = (value: string): void => {
+    fireEvent.change(input(), { target: { value } })
+  }
+  const resetButton = (): HTMLButtonElement =>
+    screen.getByRole('button', { name: /目標値を初期値/ }) as HTMLButtonElement
+  const hint = (): string => document.getElementById('target-hint')?.textContent ?? ''
+
+  it('初期値は桁区切りつきの 7,200,000 で、戻すボタンは無効', () => {
+    render(<App />)
+    expect(input().value).toBe('7,200,000')
+    expect(resetButton().disabled).toBe(true)
+  })
+
+  it('目標値を変えると、不足額と結果がその値で計算される', async () => {
+    const { container } = render(<App />)
+    typeCurrent('6850000')
+    typeTarget('7000000')
+
+    const remaining = container.querySelector<HTMLElement>('.remaining')
+    expect(within(remaining as HTMLElement).getByText('150,000')).toBeTruthy()
+    expect(await screen.findByText('ぴったり 7,000,000 になる組み合わせ')).toBeTruthy()
+    await waitFor(() =>
+      expect(within(cards(container)[0]).getByText('到達 7,000,000')).toBeTruthy(),
+    )
+  })
+
+  it('入力中の値は桁区切りつきで確認でき、入力を終えると欄も桁区切りになる', () => {
+    render(<App />)
+    typeTarget('72000000') // 1桁多い
+    expect(hint()).toContain('目標値 72,000,000 に変更中')
+
+    fireEvent.blur(input())
+    expect(input().value).toBe('72,000,000')
+  })
+
+  it('桁区切りつきのまま編集・貼り付けしても計算できる', async () => {
+    render(<App />)
+    typeCurrent('6850000')
+    typeTarget('7,000,000')
+    expect(await screen.findByText('ぴったり 7,000,000 になる組み合わせ')).toBeTruthy()
+  })
+
+  it('↺ で初期値に戻る', async () => {
+    render(<App />)
+    typeCurrent('6850000')
+    typeTarget('7000000')
+    expect(resetButton().disabled).toBe(false)
+    fireEvent.click(resetButton())
+
+    expect(input().value).toBe('7,200,000')
+    expect(resetButton().disabled).toBe(true)
+    expect(await screen.findByText('ぴったり 7,200,000 になる組み合わせ')).toBeTruthy()
+  })
+
+  it.each(['', '0', '-5', 'abc', '7200000.5', '100000000'])(
+    '不正な目標値 %o では計算せず、入力を促す',
+    async (bad) => {
+      const { container } = render(<App />)
+      typeCurrent('6850000')
+      await waitFor(() => expect(cards(container).length).toBeGreaterThan(0))
+
+      typeTarget(bad)
+      expect(input().getAttribute('aria-invalid')).toBe('true')
+      expect(hint()).toBe('目標値は 1〜99,999,999 の整数で入力してください')
+      await waitFor(() => expect(cards(container)).toHaveLength(0))
+      expect(screen.getByText('目標値を入力すると計算できます。')).toBeTruthy()
+
+      // 不正なまま入力を終えても、勝手に書き換えない。↺ で戻せる
+      fireEvent.blur(input())
+      expect(input().value).toBe(bad)
+      expect(resetButton().disabled).toBe(false)
+    },
+  )
+
+  it('エラー文は入力欄に紐づいていて、変化が読み上げられる', () => {
+    render(<App />)
+    const el = document.getElementById('target-hint')
+    expect(input().getAttribute('aria-describedby')).toBe('target-hint')
+    expect(el?.getAttribute('aria-live')).toBe('polite')
+  })
+
+  it('打ち直した直後に「現在値を入力すると…」を出さない', async () => {
+    const { container } = render(<App />)
+    typeCurrent('6850000')
+    await waitFor(() => expect(cards(container).length).toBeGreaterThan(0))
+
+    typeTarget('')
+    await screen.findByText('目標値を入力すると計算できます。')
+    typeTarget('7000000')
+    // 現在値は入っているので、遅延中でもこの文言になってはいけない
+    expect(screen.queryByText(/現在値を入力すると/)).toBeNull()
+    expect(await screen.findByText('ぴったり 7,000,000 になる組み合わせ')).toBeTruthy()
+  })
+
+  it('現在値が新しい目標値を超えていれば、その差を出す', async () => {
+    render(<App />)
+    typeCurrent('6850000')
+    typeTarget('6800000')
+    expect(await screen.findByText(/現在値が目標値を 50,000 超えています/)).toBeTruthy()
+  })
+
+  it('変更した目標値は localStorage に保存され、再マウントで復元される', async () => {
+    const first = render(<App />)
+    typeTarget('7,000,000')
+    await waitFor(() => expect(localStorage.getItem(KEY)).toBe('7000000'))
+    first.unmount()
+
+    render(<App />)
+    expect(input().value).toBe('7,000,000')
+  })
+
+  it('初期値のままなら保存しない（初期値を変えたときに古い値が残らないように）', async () => {
+    render(<App />)
+    typeCurrent('6850000')
+    await waitFor(() => expect(localStorage.getItem('lastwar-calc:current')).toBe('6850000'))
+    expect(localStorage.getItem(KEY)).toBeNull()
+  })
+
+  it('初期値に戻すと保存も消える', async () => {
+    render(<App />)
+    typeTarget('7000000')
+    await waitFor(() => expect(localStorage.getItem(KEY)).toBe('7000000'))
+    fireEvent.click(resetButton())
+    await waitFor(() => expect(localStorage.getItem(KEY)).toBeNull())
+  })
+
+  it('入力途中の不正な値は保存せず、最後に有効だった値を残す', async () => {
+    render(<App />)
+    typeTarget('7000000')
+    await waitFor(() => expect(localStorage.getItem(KEY)).toBe('7000000'))
+    typeTarget('')
+    typeTarget('70')
+    await waitFor(() => expect(localStorage.getItem(KEY)).toBe('70'))
+    typeTarget('abc')
+    expect(localStorage.getItem(KEY)).toBe('70')
+  })
+
+  it.each(['', 'abc', '0', '7200000.5', '100000000'])(
+    '不正な値 %o が保存されていたら初期値で始める',
+    (stored) => {
+      localStorage.setItem(KEY, stored)
+      render(<App />)
+      expect(input().value).toBe('7,200,000')
+    },
+  )
 })

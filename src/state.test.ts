@@ -10,6 +10,8 @@ import {
   groupRows,
   isModified,
   parseCurrent,
+  MAX_TARGET,
+  parseTarget,
   labelOf,
   parseNumber,
   prunePriority,
@@ -75,6 +77,26 @@ describe('parseCurrent', () => {
     ['0', 0, false],
   ])('%o → value=%o invalid=%o', (input, value, invalid) => {
     expect(parseCurrent(input)).toEqual({ value, invalid })
+  })
+})
+
+describe('parseTarget', () => {
+  it.each<[string, number | null, boolean]>([
+    ['7200000', 7200000, false],
+    ['7,000,000', 7000000, false],
+    ['1', 1, false],
+    [String(MAX_TARGET), MAX_TARGET, false],
+    ['99,999,999', MAX_TARGET, false],
+    ['', null, true], // 現在値と違い、空欄も入力ミス扱い（計算できないため）
+    ['100.5', null, true], // ポイントは整数なので、小数の目標値は作れない
+    ['7200000.5', null, true],
+    [String(MAX_TARGET + 1), null, true], // 桁の打ち間違いを弾く
+    ['72000000000', null, true],
+    ['abc', null, true],
+    ['0', null, true],
+    ['-100', null, true],
+  ])('%o → value=%o invalid=%o', (input, value, invalid) => {
+    expect(parseTarget(input)).toEqual({ value, invalid })
   })
 })
 
