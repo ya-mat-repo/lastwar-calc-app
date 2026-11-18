@@ -1,0 +1,486 @@
+/* ==========================================================================
+   カフェの配色（SPEC §12.4 / §14.7）
+   トップページと、カフェの配色のページ（銀塊必要量チェッカーなど）に共通の土台。
+   色・書体・背景はここだけで決める。ページごとのファイルには写さない。
+   ========================================================================== */
+:root {
+  --cafe-bg: #241a15;
+  --cafe-bg-2: #33251d;
+  --cafe-cream: #f1e6d3;
+  --cafe-cream-dim: #c9b79d;
+  --paper: #f6eedf;
+  --paper-edge: #e3d5bd;
+  --ink: #3a2a20;
+  --ink-soft: #7a6453;
+  --caramel: #a4683c;
+}
+
+/* スクロールの外側（引っぱったときに見える部分）まで珈琲色にする */
+html[data-theme='cafe'],
+html[data-theme='cafe'] body {
+  background: var(--cafe-bg);
+}
+
+.home,
+.page--cafe {
+  /* 背景（ランプの灯り）は画面の端まで広げ、中身だけを 480px に収める。
+     枠ごと 480px にすると、広い画面で左右に背景の継ぎ目が見える */
+  --gutter-min: 18px;
+  --gutter: max(var(--gutter-min), calc((100% - 480px) / 2 + var(--gutter-min)));
+  min-height: 100dvh;
+  color: var(--cafe-cream);
+  /* 明朝体で本の雰囲気を出す。外部からフォントは読み込まない（外部通信なし） */
+  font-family: 'Hiragino Mincho ProN', 'Yu Mincho', 'YuMincho', 'Noto Serif JP', 'Noto Serif CJK JP',
+    serif;
+  line-height: 1.8;
+  /* 上から差すランプの灯り。高さは固定にする（％にすると、縦に長いページで灯りが広がりすぎる） */
+  background:
+    radial-gradient(90% 420px at 50% 0%, rgba(255, 190, 120, 0.2) 0%, transparent 72%),
+    linear-gradient(180deg, var(--cafe-bg-2) 0%, var(--cafe-bg) 420px);
+}
+
+/* ==========================================================================
+   カフェの配色のページの部品（SPEC §14.7）
+   紙のカードを縦に並べ、数字は読みやすいよう等幅にそろえる。
+   汎用的な名前（.total / .week など）は、ほかのページの同名のクラスとぶつからないよう
+   .cafe の中だけに効かせている。
+   ========================================================================== */
+
+/* 共通の .page（home.css）は幅を 480px に絞っているので、カフェのページでは外す。
+   .page より後に読み込まれなくても効くよう、クラスを重ねて優先度を上げている */
+.page.page--cafe {
+  max-width: none;
+}
+
+/* ---------- 共通のバー ---------- */
+.page--cafe .pagebar {
+  padding: 0 calc(var(--gutter) - 10px);
+  background: transparent;
+  border-bottom: 1px solid rgba(241, 230, 211, 0.14);
+}
+
+.page--cafe .pagebar__home {
+  color: var(--cafe-cream);
+  font-weight: 600;
+}
+
+.page--cafe .pagebar__home:active {
+  background: rgba(241, 230, 211, 0.12);
+}
+
+.page--cafe .pagebar__title {
+  color: var(--cafe-cream-dim);
+}
+
+.cafe {
+  padding: 26px var(--gutter) calc(40px + env(safe-area-inset-bottom));
+}
+
+/* ---------- 見出し ---------- */
+.cafe__head {
+  text-align: center;
+}
+
+.cafe__title {
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-indent: 0.12em;
+  line-height: 1.5;
+}
+
+.cafe__lead {
+  margin-top: 6px;
+  font-size: 13px;
+  letter-spacing: 0.06em;
+  color: var(--cafe-cream-dim);
+}
+
+.cafe__notice {
+  margin-top: 18px;
+  font-size: 13px;
+  text-align: center;
+  color: var(--cafe-cream-dim);
+}
+
+/* ---------- 紙のカード ---------- */
+.cafe__card {
+  margin-top: 18px;
+  padding: 20px 18px 18px;
+  color: var(--ink);
+  background: linear-gradient(180deg, var(--paper) 0%, #f1e7d4 100%);
+  border: 1px solid var(--paper-edge);
+  border-radius: 4px;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.5) inset,
+    0 14px 30px rgba(0, 0, 0, 0.35);
+}
+
+.cafe__heading {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.3em;
+  text-indent: 0.3em;
+  text-align: center;
+  color: var(--ink-soft);
+}
+
+.cafe__heading::after {
+  content: '';
+  display: block;
+  width: 36px;
+  height: 1px;
+  margin: 8px auto 14px;
+  background: var(--caramel);
+  opacity: 0.6;
+}
+
+.cafe__sub {
+  margin-top: 18px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--caramel);
+}
+
+.cafe__sub:first-of-type {
+  margin-top: 0;
+}
+
+.cafe__note {
+  margin-top: 10px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--ink-soft);
+}
+
+.cafe__note--warn {
+  color: #a13a2a;
+  font-weight: 600;
+}
+
+/* ---------- 入力欄 ---------- */
+.cafe .field__label {
+  display: block;
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+
+/* 16px 未満にすると iOS がフォーカス時に画面を拡大する */
+.cafe .field__input {
+  width: 100%;
+  margin-top: 6px;
+  padding: 10px 12px;
+  font: inherit;
+  font-size: 22px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  background: #fffaf0;
+  border: 1px solid #cdbb9f;
+  border-radius: 4px;
+  outline: none;
+}
+
+.cafe .field__input:focus {
+  border-color: var(--caramel);
+  box-shadow: 0 0 0 3px rgba(164, 104, 60, 0.18);
+}
+
+.cafe .field__input--invalid,
+.cafe .field__input--invalid:focus {
+  color: #a13a2a;
+  border-color: #a13a2a;
+  box-shadow: none;
+}
+
+.cafe .field__hint {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--ink-soft);
+  min-height: 21px;
+}
+
+.cafe .field__hint--invalid {
+  color: #a13a2a;
+  font-weight: 600;
+}
+
+/* ---------- スイッチ ---------- */
+.cafe .switch {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px dotted #cdbb9f;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* 見た目は .switch__track で描くが、キーボード操作と読み上げのために input 自体は残す */
+.cafe .switch__input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+}
+
+.cafe .switch__track {
+  flex: none;
+  position: relative;
+  width: 46px;
+  height: 28px;
+  margin-top: 2px;
+  background: #cdbb9f;
+  border-radius: 999px;
+  transition: background-color 0.3s ease;
+}
+
+.cafe .switch__track::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 22px;
+  height: 22px;
+  background: #fffaf0;
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  transition: transform 0.3s ease;
+}
+
+.cafe .switch__input:checked + .switch__track {
+  background: var(--caramel);
+}
+
+.cafe .switch__input:checked + .switch__track::after {
+  transform: translateX(18px);
+}
+
+.cafe .switch__input:focus-visible + .switch__track {
+  outline: 2px solid var(--caramel);
+  outline-offset: 2px;
+}
+
+.cafe .switch__title {
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.6;
+}
+
+.cafe .switch__desc {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--ink-soft);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cafe .switch__track,
+  .cafe .switch__track::after {
+    transition: none;
+  }
+}
+
+/* ---------- 結果 ---------- */
+.cafe .total {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 10px;
+}
+
+.cafe .total__unit {
+  font-size: 13px;
+  letter-spacing: 0.2em;
+  color: var(--ink-soft);
+}
+
+.cafe .total__value {
+  font-size: 38px;
+  font-weight: 600;
+  line-height: 1.3;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 項目名と数字を左右に分ける帳面 */
+.cafe .ledger {
+  margin-top: 10px;
+}
+
+.cafe .ledger > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 0;
+  border-top: 1px dotted #cdbb9f;
+  font-size: 13px;
+}
+
+.cafe .ledger dt {
+  color: var(--ink-soft);
+}
+
+.cafe .ledger dd {
+  font-size: 15px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.cafe .ledger__ok dd {
+  color: #4f6b3a;
+}
+
+.cafe .ledger__short dt,
+.cafe .ledger__short dd {
+  color: #a13a2a;
+}
+
+/* ---------- 4週間の流れ ---------- */
+.cafe .weeks {
+  list-style: none;
+  margin-top: 6px;
+}
+
+.cafe .week {
+  padding: 14px 0;
+  border-top: 1px dotted #cdbb9f;
+}
+
+.cafe .week__head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.cafe .week__no {
+  font-size: 12px;
+  letter-spacing: 0.2em;
+  color: var(--caramel);
+}
+
+.cafe .week__name {
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+}
+
+.cafe .week__reserve {
+  margin-top: 4px;
+  font-size: 13px;
+}
+
+.cafe .week__reserve strong {
+  font-size: 19px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--caramel);
+}
+
+.cafe .week__reserve--none {
+  color: var(--ink-soft);
+}
+
+.cafe .week__flow {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.cafe .week__flow dt {
+  font-size: 11px;
+  color: var(--ink-soft);
+}
+
+.cafe .week__flow dd {
+  font-size: 14px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- 内訳 ---------- */
+.cafe .events {
+  list-style: none;
+  margin-top: 4px;
+}
+
+.cafe .event {
+  padding: 10px 0;
+  border-top: 1px dotted #cdbb9f;
+}
+
+.cafe .event:first-child {
+  border-top: none;
+}
+
+.cafe .event__name {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.cafe .event__none {
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+
+.cafe .event__list {
+  list-style: none;
+}
+
+/* 1行目: 区分・内容・月の銀塊 / 2行目: お金に直した額 */
+.cafe .exchange {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: baseline;
+  column-gap: 8px;
+  margin-top: 6px;
+  font-size: 13px;
+}
+
+.cafe .exchange__tag {
+  padding: 0 8px;
+  font-size: 11px;
+  color: #fffaf0;
+  background: var(--caramel);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.cafe .exchange__tag--optional {
+  color: var(--caramel);
+  background: transparent;
+  border: 1px solid rgba(164, 104, 60, 0.6);
+}
+
+.cafe .exchange__what {
+  overflow-wrap: anywhere;
+}
+
+.cafe .exchange__total {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.cafe .exchange__yen {
+  grid-column: 1 / -1;
+  font-size: 11px;
+  color: var(--ink-soft);
+}
+
+/* 必要量に入れていない任意の交換は薄くし、数字に取り消し線を引く */
+.cafe .exchange--off .exchange__what,
+.cafe .exchange--off .exchange__yen {
+  opacity: 0.55;
+}
+
+.cafe .exchange--off .exchange__total {
+  opacity: 0.55;
+  text-decoration: line-through;
+}

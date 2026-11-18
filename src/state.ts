@@ -92,11 +92,33 @@ export const fmt = (n: number): string =>
  * 「負数の行は計算対象から外して赤枠にする」（SPEC §3.4）が成立しないため。
  */
 export function parseNumber(raw: string): number | null {
-  const negative = /^\s*-/.test(raw)
-  const cleaned = raw.replace(/[^0-9.]/g, '')
+  // 全角の数字・記号を半角にそろえる。日本語入力のまま打った「２0500」のような混在を
+  // そのまま通すと、全角の桁だけが捨てられて別の値（500）になってしまう
+  const text = raw.normalize('NFKC')
+  // マイナスに見える文字（− や、日本語入力で出やすい ー）も負号として扱う
+  const negative = /^\s*[-−ー]/.test(text)
+  const cleaned = text.replace(/[^0-9.]/g, '')
   if (cleaned === '') return null
   const n = Number((negative ? '-' : '') + cleaned)
-  return Number.isFinite(n) ? n : null
+  if (!Number.isFinite(n)) return null
+  // 「-0」は 0 にそろえる（そのままだと 0 以上の判定を通り、画面に「-0」と出る）
+  return n === 0 ? 0 : n
+}
+
+/**
+ * min〜max の整数だけを受け付ける入力の解釈。
+ * 空欄・範囲外・小数・不正な値は、どれも入力ミス（value: null）として返す。
+ */
+export function parseIntInRange(
+  raw: string,
+  min: number,
+  max: number,
+): { value: number | null; invalid: boolean } {
+  const n = parseNumber(raw)
+  if (n === null || !Number.isInteger(n) || n < min || n > max) {
+    return { value: null, invalid: true }
+  }
+  return { value: n, invalid: false }
 }
 
 /**
@@ -120,11 +142,7 @@ export const MAX_TARGET = 99_999_999
  * - 現在値と違い「未入力」の状態は無い（初期値 TARGET が入っている）ので、空欄も invalid にする
  */
 export function parseTarget(raw: string): { value: number | null; invalid: boolean } {
-  const n = parseNumber(raw)
-  if (n === null || !Number.isInteger(n) || n <= 0 || n > MAX_TARGET) {
-    return { value: null, invalid: true }
-  }
-  return { value: n, invalid: false }
+  return parseIntInRange(raw, 1, MAX_TARGET)
 }
 
 /** 現在値と目標値の差。remaining=まだ足りない / exact=ちょうど / over=超えている */

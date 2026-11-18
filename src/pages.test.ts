@@ -1,11 +1,21 @@
 import { describe, expect, it } from 'vitest'
-import { APP_NAME, PAGES, cupLabel, documentTitle, pageFromHash } from './pages'
+import {
+  APP_NAME,
+  PAGES,
+  THEME_COLOR,
+  cupLabel,
+  documentTitle,
+  pageDef,
+  pageFromHash,
+  themeOf,
+} from './pages'
 
 describe('pageFromHash', () => {
   it.each<[string, string]>([
     ['', 'home'],
     ['#/', 'home'],
     ['#/calc', 'calc'],
+    ['#/silver', 'silver'],
     ['#/unknown', 'home'], // 知らない URL はトップページ
     ['#/calc/extra', 'home'],
     ['#calc', 'home'],
@@ -13,10 +23,8 @@ describe('pageFromHash', () => {
     expect(pageFromHash(hash)).toBe(page)
   })
 
-  it('準備中のページは URL を直接開いてもトップページにする', () => {
-    for (const p of PAGES.filter((x) => x.comingSoon)) {
-      expect(pageFromHash(p.hash)).toBe('home')
-    }
+  it('準備中かどうかはここでは見ない（views.ts の resolvePage が見る）', () => {
+    expect(pageFromHash('#/shop')).toBe('shop')
   })
 })
 
@@ -32,6 +40,29 @@ describe('PAGES', () => {
       expect(p.title).not.toBe('')
       expect(p.description).not.toBe('')
     }
+  })
+})
+
+describe('並び順と配色', () => {
+  it('1杯目 計算機、2杯目 銀塊必要量チェッカー、3杯目 最安イベント早見', () => {
+    expect(PAGES.map((p) => p.key)).toEqual(['calc', 'silver', 'shop'])
+  })
+
+  it('pageDef でページの定義を引ける', () => {
+    expect(pageDef('silver').title).toBe('銀塊必要量チェッカー')
+    expect(pageDef('silver').description).not.toBe('')
+  })
+
+  it('配色ごとに、ブラウザ上部の色（theme-color）を持つ', () => {
+    expect(THEME_COLOR.cafe).toMatch(/^#[0-9a-f]{6}$/)
+    expect(THEME_COLOR.dark).toMatch(/^#[0-9a-f]{6}$/)
+    expect(THEME_COLOR.cafe).not.toBe(THEME_COLOR.dark)
+  })
+
+  it('トップページと銀塊必要量チェッカーはカフェ、計算機は暗い配色', () => {
+    expect(themeOf('home')).toBe('cafe')
+    expect(themeOf('silver')).toBe('cafe')
+    expect(themeOf('calc')).toBe('dark')
   })
 })
 

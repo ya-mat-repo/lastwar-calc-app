@@ -4,39 +4,11 @@
    夕方の喫茶店（深い珈琲色とランプの灯り）に、開いた本のページを1枚置く。
    計算機（暗い背景 × ゴールド × レッド）とは配色を分けている。
    ========================================================================== */
-:root {
-  --cafe-bg: #241a15;
-  --cafe-bg-2: #33251d;
-  --cafe-cream: #f1e6d3;
-  --cafe-cream-dim: #c9b79d;
-  --paper: #f6eedf;
-  --paper-edge: #e3d5bd;
-  --ink: #3a2a20;
-  --ink-soft: #7a6453;
-  --caramel: #a4683c;
-}
-
-/* スクロールの外側（引っぱったときに見える部分）まで珈琲色にする */
-html[data-page='home'],
-html[data-page='home'] body {
-  background: var(--cafe-bg);
-}
-
 .home {
-  /* 背景（ランプの灯り）は画面の端まで広げ、中身だけを 480px に収める。
-     枠ごと 480px にすると、広い画面で左右に背景の継ぎ目が見える */
-  --gutter: max(22px, calc((100% - 480px) / 2 + 22px));
-  min-height: 100dvh;
+  /* 配色・書体・背景は cafe.css の土台（.home と .page--cafe に共通）で決めている */
+  --gutter-min: 22px;
   padding: 56px var(--gutter) calc(40px + env(safe-area-inset-bottom));
-  color: var(--cafe-cream);
-  /* 明朝体で本の雰囲気を出す。外部からフォントは読み込まない（外部通信なし） */
-  font-family: 'Hiragino Mincho ProN', 'Yu Mincho', 'YuMincho', 'Noto Serif JP', 'Noto Serif CJK JP',
-    serif;
   line-height: 1.9;
-  /* 上から差すランプの灯り */
-  background:
-    radial-gradient(90% 46% at 50% 0%, rgba(255, 190, 120, 0.2) 0%, transparent 72%),
-    linear-gradient(180deg, var(--cafe-bg-2) 0%, var(--cafe-bg) 420px);
 }
 
 /* ---------- 見出し ---------- */

@@ -3,6 +3,7 @@ import type { PageDef } from '../pages'
 import { TODAYS_QUOTE } from '../quotes'
 import { fmt, gapToTarget, parseCurrent } from '../state'
 import { isCalcTargetInvalid, loadCurrentRaw, loadSavedTarget } from '../storage'
+import { isReady } from '../views'
 
 /**
  * トップページ（SPEC §12.4）。
@@ -58,6 +59,8 @@ function noteFor(page: PageDef): string | null {
 
 function Chapter({ page, index }: { page: PageDef; index: number }) {
   const note = noteFor(page)
+  // まだ画面が無いページ（views.ts で null）は「準備中」として出す
+  const comingSoon = !isReady(page.key)
   const body = (
     <>
       <span className="home__no">
@@ -66,7 +69,7 @@ function Chapter({ page, index }: { page: PageDef; index: number }) {
       </span>
       <span className="home__name">{page.title}</span>
       <span className="home__desc">{page.description}</span>
-      {page.comingSoon ? (
+      {comingSoon ? (
         <span className="home__note">準備中</span>
       ) : (
         note && <span className="home__note">前回のつづき ― {note}</span>
@@ -74,7 +77,7 @@ function Chapter({ page, index }: { page: PageDef; index: number }) {
     </>
   )
   // 準備中のページはリンクにしない（押しても開けないものを押せるように見せない）
-  return page.comingSoon ? (
+  return comingSoon ? (
     <div className="home__chapter home__chapter--soon" aria-disabled="true">
       {body}
     </div>

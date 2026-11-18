@@ -7,7 +7,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import App from './App'
-import { APP_NAME } from './pages'
+import { APP_NAME, PAGES, THEME_COLOR } from './pages'
 import { QUOTES } from './quotes'
 import { setCalcTargetInvalid } from './storage'
 
@@ -29,6 +29,12 @@ beforeEach(() => {
   localStorage.clear()
   window.history.replaceState(null, '', window.location.pathname)
   window.scrollTo = scrollTo
+  // index.html にある theme-color を再現する（App がページの配色に合わせて書き換える）
+  document.head.querySelector('meta[name="theme-color"]')?.remove()
+  const meta = document.createElement('meta')
+  meta.name = 'theme-color'
+  meta.content = '#0b0e13'
+  document.head.append(meta)
   scrollTo.mockClear()
   setCalcTargetInvalid(false) // メモリ上の目印なので、テストごとに戻す
 })
@@ -41,7 +47,7 @@ describe('App: ページ切り替え', () => {
     expect(container.querySelector('.home h1')?.textContent).not.toBe('')
     expect(calcPage(container)).toBeNull()
     expect(document.title).toBe(APP_NAME)
-    expect(document.documentElement.dataset.page).toBe('home')
+    expect(document.documentElement.dataset.theme).toBe('cafe')
   })
 
   it('#/calc を直接開くと計算機が出る', () => {
@@ -50,7 +56,7 @@ describe('App: ページ切り替え', () => {
     expect(screen.getByLabelText('現在値')).toBeTruthy()
     expect(container.querySelector('.home')).toBeNull()
     expect(document.title).toBe(`ポイント計算機 | ${APP_NAME}`)
-    expect(document.documentElement.dataset.page).toBe('calc')
+    expect(document.documentElement.dataset.theme).toBe('dark')
   })
 
   it('目次のリンクは計算機の URL を指し、移動すると計算機が出る', () => {
@@ -80,6 +86,48 @@ describe('App: ページ切り替え', () => {
     const { container } = render(<App />)
     expect(container.querySelector('.home')).not.toBeNull()
     expect(calcPage(container)).toBeNull()
+  })
+
+  it('#/silver を開くと銀塊必要量チェッカーが、カフェの配色で出る', () => {
+    window.history.replaceState(null, '', '#/silver')
+    const { container } = render(<App />)
+    expect(screen.getByRole('heading', { level: 1, name: '銀塊必要量チェッカー' })).toBeTruthy()
+    expect(container.querySelector('.page--cafe')).not.toBeNull()
+    expect(document.title).toBe(`銀塊必要量チェッカー | ${APP_NAME}`)
+    expect(document.documentElement.dataset.theme).toBe('cafe')
+    const bar = screen.getByRole('navigation', { name: 'ページ移動' })
+    expect(within(bar).getByRole('link', { name: '← ホーム' }).getAttribute('href')).toBe('#/')
+  })
+
+  it('ページを渡り歩いても、出ているのは1ページだけで、開いたページは隠して残す', () => {
+    const { container } = render(<App />)
+    go('#/calc')
+    go('#/silver')
+    const pages = [...container.querySelectorAll<HTMLElement>('.page')]
+    expect(pages.map((p) => [p.getAttribute('aria-label'), p.hidden])).toEqual([
+      ['ポイント計算機', true],
+      ['銀塊必要量チェッカー', false],
+    ])
+    expect(document.activeElement).toBe(pages[1])
+  })
+
+  it('ブラウザ上部の色（theme-color）を、ページの配色に合わせる', () => {
+    const color = (): string | null =>
+      document.head.querySelector('meta[name="theme-color"]')?.getAttribute('content') ?? null
+    render(<App />)
+    expect(color()).toBe(THEME_COLOR.cafe) // トップページ
+    go('#/calc')
+    expect(color()).toBe(THEME_COLOR.dark)
+    go('#/silver')
+    expect(color()).toBe(THEME_COLOR.cafe)
+  })
+
+  it('ページの中の見出しと説明は、目次と同じもの（pages.ts）を使う', () => {
+    window.history.replaceState(null, '', '#/silver')
+    const { container } = render(<App />)
+    const def = PAGES.find((p) => p.key === 'silver')
+    expect(container.querySelector('.cafe__title')?.textContent).toBe(def?.title)
+    expect(container.querySelector('.cafe__lead')?.textContent).toBe(def?.description)
   })
 
   it('最初の表示ではスクロールもフォーカスも動かさない', () => {
@@ -127,9 +175,10 @@ describe('App: トップページ', () => {
     render(<App />)
     const nav = screen.getByRole('navigation', { name: /目次/ })
     const items = within(nav).getAllByRole('listitem')
-    expect(items.map((li) => li.querySelector('.home__no')?.textContent)).toEqual(['1杯目', '2杯目'])
+    expect(items.map((li) => li.querySelector('.home__no')?.textContent)).toEqual(['1杯目', '2杯目', '3杯目'])
     expect(items.map((li) => li.querySelector('.home__name')?.textContent)).toEqual([
       'ポイント計算機',
+      '銀塊必要量チェッカー',
       '最安イベント早見',
     ])
   })
@@ -154,7 +203,7 @@ describe('App: トップページ', () => {
   it('「◯杯目」の先頭に、読み上げ対象外のイラストが付く', () => {
     const { container } = render(<App />)
     const labels = [...container.querySelectorAll('.home__no')]
-    expect(labels).toHaveLength(2)
+    expect(labels).toHaveLength(3)
     for (const label of labels) {
       const icon = label.firstElementChild
       expect(icon?.tagName.toLowerCase()).toBe('svg')

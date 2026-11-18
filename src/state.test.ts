@@ -12,6 +12,7 @@ import {
   parseCurrent,
   MAX_TARGET,
   gapToTarget,
+  parseIntInRange,
   parseTarget,
   labelOf,
   parseNumber,
@@ -63,6 +64,17 @@ describe('parseNumber', () => {
     [' -100 ', -100],
     ['-', null],
     ['1-2', 12], // 先頭以外の `-` は今までどおり捨てる
+    // 全角は半角にそろえる。そろえないと全角の桁だけ捨てられて別の値になる
+    ['２０５００', 20500],
+    ['２0500', 20500], // 以前は 500 になっていた
+    ['６，８５０，０００', 6850000],
+    ['２８１２．５', 2812.5],
+    ['－５', -5], // 全角のマイナス
+    ['−5', -5], // 数学記号のマイナス
+    ['ー5', -5], // 日本語入力で出やすい長音
+    // -0 は 0 にそろえる（Object.is で比べるので -0 のままだと落ちる）
+    ['-0', 0],
+    ['-0.0', 0],
   ])('%o → %o', (input, expected) => {
     expect(parseNumber(input)).toBe(expected)
   })
@@ -98,6 +110,26 @@ describe('parseTarget', () => {
     ['-100', null, true],
   ])('%o → value=%o invalid=%o', (input, value, invalid) => {
     expect(parseTarget(input)).toEqual({ value, invalid })
+  })
+})
+
+describe('parseIntInRange', () => {
+  it.each<[string, number, number, number | null]>([
+    ['5', 0, 10, 5],
+    ['0', 0, 10, 0],
+    ['10', 0, 10, 10],
+    ['-0', 0, 10, 0], // 0 として受け付け、-0 のまま返さない
+    ['５', 0, 10, 5],
+    ['', 0, 10, null],
+    ['abc', 0, 10, null],
+    ['-1', 0, 10, null],
+    ['11', 0, 10, null],
+    ['2.5', 0, 10, null],
+    ['0', 1, 10, null], // 下限が 1 なら 0 は不正
+  ])('%o（%i〜%i）→ %o', (raw, min, max, value) => {
+    const r = parseIntInRange(raw, min, max)
+    expect(r).toEqual({ value, invalid: value === null })
+    expect(Object.is(r.value, -0)).toBe(false)
   })
 })
 
