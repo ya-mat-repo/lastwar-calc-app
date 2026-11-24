@@ -657,3 +657,113 @@ html[data-theme='cafe'] body {
   opacity: 0.55;
   text-decoration: line-through;
 }
+
+/* ---------- イベントカレンダー ---------- */
+/* 月曜始まりの7列。各週は「日付の行」と「イベントの帯の行」の2行で、週ごとに tbody を分けている */
+.cafe .cal {
+  width: 100%;
+  margin-top: 4px;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-variant-numeric: tabular-nums;
+}
+
+.cafe .cal + .cal {
+  margin-top: 22px;
+}
+
+.cafe .cal__caption {
+  padding-bottom: 6px;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-align: left;
+  color: var(--ink);
+}
+
+.cafe .cal__weekday {
+  padding: 2px 0 4px;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--ink-soft);
+  border-bottom: 1px solid #cdbb9f;
+}
+
+.cafe .cal__day {
+  height: 26px;
+  padding: 4px 0 0;
+  font-size: 13px;
+  text-align: center;
+  color: var(--ink);
+}
+
+/* 今日。数字を丸で囲む */
+.cafe .cal__day--today {
+  font-weight: 600;
+  color: #fffaf0;
+  background: radial-gradient(circle at 50% 58%, var(--ink) 0 11px, transparent 12px);
+}
+
+.cafe .cal__bandRow td {
+  height: 22px;
+  padding: 0 0 6px;
+}
+
+/* イベントの帯。火〜日のうち、その月の日にだけ引く */
+.cafe .cal__band {
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  color: #fffaf0;
+  background-color: var(--band, var(--caramel));
+  background-clip: content-box;
+  border-radius: 999px;
+}
+
+/* イベントごとの色。カフェの色合いに寄せた、落ち着いた4色 */
+.cafe .cal__band[data-event='gold'] {
+  --band: #b9862f;
+}
+
+.cafe .cal__band[data-event='shot'] {
+  --band: #a95c43;
+}
+
+.cafe .cal__band[data-event='war'] {
+  --band: #76825a;
+}
+
+.cafe .cal__band[data-event='bounty'] {
+  --band: #6f6388;
+}
+
+/* 前の月に始まったイベントの続きは薄くする（この月のイベントには数えない） */
+.cafe .cal__band--continued {
+  opacity: 0.45;
+}
+
+.cafe .cal__band small {
+  font-size: 9px;
+  font-weight: 400;
+}
+
+/* ---------- 来月に向けて（今月のカードの中） ---------- */
+.cafe .outlook__title {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid #cdbb9f;
+}
+
+/* 今月の繰越推奨量は、このカードでいちばん決め手になる数字なので目立たせる */
+.cafe .outlook__recommended dt {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.cafe .outlook__recommended dd {
+  font-size: 19px;
+  color: var(--caramel);
+}

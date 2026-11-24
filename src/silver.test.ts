@@ -2,23 +2,31 @@ import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_CARRY,
   DEFAULT_DAMAGE,
+  EVENT_ORIGIN,
   EXCHANGE_LIMIT,
   EXCHANGE_UNIT,
   MAX_CARRY,
   MAX_DAMAGE,
   MONTHLY_CAP,
   SILVER_EVENTS,
+  calendarWeeks,
+  dailyIncome,
+  daysInMonth,
   exchangeTotal,
   exchangeYen,
   exchangesNeeded,
+  monthEvents,
   mustTotal,
+  nextMonth,
   optionalTotal,
   parseCarry,
   parseDamage,
-  planSilver,
+  planCalendar,
+  recommendedCarry,
   snapCarry,
-  weeklyBaseIncome,
+  todayYmd,
 } from './silver'
+import type { MonthPlan, YearMonth, Ymd } from './silver'
 
 const event = (key: string) => {
   const e = SILVER_EVENTS.find((x) => x.key === key)
@@ -53,9 +61,6 @@ describe('データ（SPEC §14.3）', () => {
     ])
   })
 
-  it('ダメージ報酬を除く週の入手量は (6,500 + 2,500) × 6 = 54,000', () => {
-    expect(weeklyBaseIncome()).toBe(54_000)
-  })
 })
 
 describe('お金に直した額（SPEC §14.4）', () => {
@@ -115,28 +120,6 @@ describe('紫晶石 → 銀塊の交換の上限（SPEC §14.2）', () => {
     expect(exchangesNeeded(silver)).toBe(times)
   })
 
-  // 任意の交換を両方入れると 295,000（59回ぶん）で、月の上限 250,000（50回）を超える。
-  // 交換回数は上限の 50 で止め、足りない銀塊を silverShortage に出す
-  it.each<[boolean, boolean, number, number, number, number]>([
-    [true, true, 295_000, 50, 45_000, 48_000],
-    [true, false, 235_000, 47, 0, 63_000],
-    [false, true, 145_000, 29, 0, 153_000],
-    [false, false, 85_000, 17, 0, 213_000],
-  ])(
-    '閃金 %o・賞金稼ぎ %o → 必要量 %i、交換 %i 回、銀塊の不足 %i、紫晶石の余り %i',
-    (gold, bounty, need, times, shortage, balance) => {
-      const p = planSilver(DEFAULT_DAMAGE, { gold, bounty })
-      expect([p.monthlyNeed, p.exchanges, p.silverShortage, p.balance]).toEqual([
-        need,
-        times,
-        shortage,
-        balance,
-      ])
-      expect(p.exchangeAmount).toBe(times * EXCHANGE_UNIT)
-      expect(p.exchanges).toBeLessThanOrEqual(EXCHANGE_LIMIT)
-    },
-  )
-
   it('必ずの交換だけなら、上限に収まる', () => {
     const must = SILVER_EVENTS.reduce((s, e) => s + mustTotal(e), 0)
     expect(must).toBeLessThanOrEqual(MONTHLY_CAP)
@@ -170,325 +153,435 @@ describe('parseDamage', () => {
   })
 })
 
-/** 4週間の流れを [必要量, 入手量, 交換回数, 不足分, 繰越量（出）] の配列にする */
-const flow = (p: ReturnType<typeof planSilver>): number[][] =>
-  p.weeks.map((w) => [w.use, w.gain, w.gainTimes, w.shortfall, w.carryOver])
+const NOV: YearMonth = { year: 2026, month: 11 }
+const md = (d: Ymd): string => `${d.month}/${d.day}`
 
-describe('planSilver: 月の集計', () => {
-  it('初期値・すべて交換', () => {
-    const p = planSilver(DEFAULT_DAMAGE)
-    expect(p.weeklyIncome).toBe(74_500)
-    expect(p.monthlyIncome).toBe(298_000)
-    expect(p.monthlyNeed).toBe(295_000)
-    expect(p.carry).toBe(DEFAULT_CARRY)
-    // 交換できるのは 250,000 までなので、紫晶石は 298,000 − 250,000 = 48,000 余る
-    expect(p.balance).toBe(48_000)
+/** 2か月ぶんのイベントを [開始日, 名前, 繰越（入）, 入手量, 必要量, 不足分, 繰越（出）] の配列にする */
+const flow = (months: readonly MonthPlan[]): (string | number)[][] =>
+  months.flatMap((m) =>
+    m.events.map((e) => [md(e.start), e.event.name, e.carryIn, e.gain, e.use, e.shortfall, e.carryOver]),
+  )
+
+/** 月ごとの結果を [必要量, 交換回数, 不足する銀塊, 入手量, 紫晶石の余り] の配列にする */
+const summary = (months: readonly MonthPlan[]): number[][] =>
+  months.map((m) => [m.need, m.exchanges, m.silverShortage, m.income, m.balance])
+
+describe('イベントの予定（SPEC §14.6）', () => {
+  it('起点は 2026-11-03（火）で、その週が閃金', () => {
+    expect(EVENT_ORIGIN).toEqual({ year: 2026, month: 11, day: 3 })
+    expect(monthEvents(NOV)[0]?.event.name).toBe('閃金')
   })
 
-  it('どちらもお金で上限まで買わないなら、任意の 210,000 を必要量に入れない', () => {
-    const p = planSilver(DEFAULT_DAMAGE, { gold: false, bounty: false })
-    expect(p.monthlyNeed).toBe(85_000)
-    expect(p.balance).toBe(213_000)
-    expect(p.weeks.map((w) => [w.use, w.optionalUse])).toEqual([
-      [30_000, 0],
-      [25_000, 0],
-      [0, 0],
-      [30_000, 0],
+  it('2026年11月は4つ（閃金 → 百発百中 → 戦争準備 → 賞金稼ぎ）', () => {
+    expect(monthEvents(NOV).map((e) => [md(e.start), md(e.end), e.event.name])).toEqual([
+      ['11/3', '11/8', '閃金'],
+      ['11/10', '11/15', '百発百中'],
+      ['11/17', '11/22', '戦争準備'],
+      ['11/24', '11/29', '賞金稼ぎ'],
     ])
   })
 
-  it('指定が無いイベントは「上限まで買う」として扱う', () => {
-    expect(planSilver(DEFAULT_DAMAGE, {}).monthlyNeed).toBe(295_000)
-    const p = planSilver(DEFAULT_DAMAGE, { gold: true })
-    expect([p.weeks[0]?.optionalUse, p.weeks[3]?.optionalUse]).toEqual([150_000, 60_000])
+  it('2026年12月は火曜日が5回あり、閃金が2回入る', () => {
+    expect(monthEvents({ year: 2026, month: 12 }).map((e) => [md(e.start), e.event.name])).toEqual([
+      ['12/1', '閃金'],
+      ['12/8', '百発百中'],
+      ['12/15', '戦争準備'],
+      ['12/22', '賞金稼ぎ'],
+      ['12/29', '閃金'],
+    ])
   })
 
+  it('月をまたぐイベントは開始日の月に数え、その月の末日に精算する', () => {
+    const last = monthEvents({ year: 2026, month: 12 })[4]
+    expect(last?.start).toEqual({ year: 2026, month: 12, day: 29 })
+    expect(last?.end).toEqual({ year: 2027, month: 1, day: 3 }) // 日曜日は翌年
+    expect(last?.settle).toEqual({ year: 2026, month: 12, day: 31 })
+    // 翌月（2027年1月）のイベントには入らない
+    expect(monthEvents({ year: 2027, month: 1 }).map((e) => [md(e.start), e.event.name])).toEqual([
+      ['1/5', '百発百中'],
+      ['1/12', '戦争準備'],
+      ['1/19', '賞金稼ぎ'],
+      ['1/26', '閃金'],
+    ])
+  })
+
+  it('月をまたがないイベントは、最終日（日曜日）に精算する', () => {
+    for (const e of monthEvents(NOV)) expect(e.settle).toEqual(e.end)
+  })
+
+  it('起点より前の月にも、同じ周期をさかのぼって当てはめる', () => {
+    expect(monthEvents({ year: 2026, month: 10 }).map((e) => [md(e.start), e.event.name])).toEqual([
+      ['10/6', '閃金'],
+      ['10/13', '百発百中'],
+      ['10/20', '戦争準備'],
+      ['10/27', '賞金稼ぎ'],
+    ])
+  })
+
+  it('どの月も、イベントは火曜日に始まり4〜5回で、開催順が崩れない', () => {
+    let ym: YearMonth = { year: 2025, month: 1 }
+    const names: string[] = []
+    for (let i = 0; i < 48; i++) {
+      const events = monthEvents(ym)
+      expect([4, 5]).toContain(events.length)
+      for (const e of events) {
+        expect(new Date(Date.UTC(e.start.year, e.start.month - 1, e.start.day)).getUTCDay()).toBe(2)
+        names.push(e.event.name)
+      }
+      ym = nextMonth(ym)
+    }
+    const order = SILVER_EVENTS.map((e) => e.name)
+    const offset = order.indexOf(names[0] as string)
+    names.forEach((name, i) => expect(name).toBe(order[(offset + i) % order.length]))
+  })
 })
 
-describe('planSilver: 紫晶石が足りないとき（実際に交換できる量で計算する）', () => {
-  it('交換回数は、手持ちの紫晶石で交換できるぶんまで', () => {
-    const p = planSilver(0) // 入手 216,000。交換したいのは上限の 250,000（50回）
-    expect([p.exchanges, p.exchangeAmount]).toEqual([43, 215_000])
-    expect(p.amethystLimited).toBe(true)
-    // 4週間の流れの交換回数の合計と一致する
-    expect(p.weeks.reduce((s, w) => s + w.gainTimes, 0)).toBe(p.exchanges)
+describe('暦の小さな関数', () => {
+  it('daysInMonth', () => {
+    expect(daysInMonth({ year: 2026, month: 11 })).toBe(30)
+    expect(daysInMonth({ year: 2026, month: 12 })).toBe(31)
+    expect(daysInMonth({ year: 2027, month: 2 })).toBe(28)
+    expect(daysInMonth({ year: 2028, month: 2 })).toBe(29) // うるう年
   })
 
-  it('銀塊の不足は、上限で足りないぶんと紫晶石で足りないぶんを合わせた量', () => {
-    const p = planSilver(0)
-    expect(p.silverShortage).toBe(80_000) // 295,000 − 215,000（上限ぶん 45,000 ＋ 紫晶石ぶん 35,000）
+  it('nextMonth は年をまたぐ', () => {
+    expect(nextMonth({ year: 2026, month: 11 })).toEqual({ year: 2026, month: 12 })
+    expect(nextMonth({ year: 2026, month: 12 })).toEqual({ year: 2027, month: 1 })
   })
 
-  it('上限には収まっていても、紫晶石が足りなければ銀塊は不足する', () => {
-    // 必要 235,000（47回）は上限以内だが、紫晶石 216,000 では 43回（215,000）しか交換できない
-    const p = planSilver(0, { bounty: false })
-    expect([p.monthlyNeed, p.exchanges, p.exchangeAmount]).toEqual([235_000, 43, 215_000])
-    expect(p.silverShortage).toBe(20_000)
-    expect(p.amethystLimited).toBe(true)
+  it('todayYmd は端末の時計の日付を返す', () => {
+    expect(todayYmd(new Date(2026, 10, 25, 23, 59))).toEqual({ year: 2026, month: 11, day: 25 })
+    expect(todayYmd(new Date(2027, 0, 1, 0, 0))).toEqual({ year: 2027, month: 1, day: 1 })
   })
 
-  it('紫晶石の余りは負にならない（交換できたぶんしか使わない）', () => {
-    for (const damage of [0, 1_000, 10_000, 19_750, 20_500]) {
-      for (const gold of [true, false]) {
-        for (const bounty of [true, false]) {
-          const p = planSilver(damage, { gold, bounty })
-          expect(p.balance).toBeGreaterThanOrEqual(0)
-          expect(p.balance).toBe(p.monthlyIncome - p.exchangeAmount)
-        }
-      }
+  it('毎日の入手は 連盟対決報酬 6,500 ＋ 晶石ボス 2,500 ＝ 9,000', () => {
+    expect(dailyIncome()).toBe(9_000)
+  })
+})
+
+describe('calendarWeeks（月曜始まりのカレンダーと、イベントの帯）', () => {
+  const rows = (ym: YearMonth): string[] =>
+    calendarWeeks(ym).map((w) => {
+      const days = w.days.map((d) => (d === null ? '--' : String(d).padStart(2, '0'))).join(' ')
+      const band = w.band
+        ? ` ${w.band.event.name}[${w.band.from}-${w.band.to}]${w.band.continued ? '（続き）' : ''}`
+        : ''
+      return days + band
+    })
+
+  it('2026年11月（1日が日曜日）', () => {
+    expect(rows(NOV)).toEqual([
+      '-- -- -- -- -- -- 01 賞金稼ぎ[6-6]（続き）', // 10/27 に始まった賞金稼ぎの最終日
+      '02 03 04 05 06 07 08 閃金[1-6]',
+      '09 10 11 12 13 14 15 百発百中[1-6]',
+      '16 17 18 19 20 21 22 戦争準備[1-6]',
+      '23 24 25 26 27 28 29 賞金稼ぎ[1-6]',
+      '30 -- -- -- -- -- --', // 月曜日だけの週は、帯が無い
+    ])
+  })
+
+  it('2026年12月（月をまたぐ閃金は、月末までの帯になる）', () => {
+    expect(rows({ year: 2026, month: 12 })).toEqual([
+      '-- 01 02 03 04 05 06 閃金[1-6]',
+      '07 08 09 10 11 12 13 百発百中[1-6]',
+      '14 15 16 17 18 19 20 戦争準備[1-6]',
+      '21 22 23 24 25 26 27 賞金稼ぎ[1-6]',
+      '28 29 30 31 -- -- -- 閃金[1-3]',
+    ])
+  })
+
+  it('2027年1月（前の月に始まった閃金の続きから始まる）', () => {
+    expect(rows({ year: 2027, month: 1 })[0]).toBe('-- -- -- -- 01 02 03 閃金[4-6]（続き）')
+  })
+
+  it('帯の「続き」でない週の数は、その月のイベントの数と同じ', () => {
+    let ym: YearMonth = { year: 2026, month: 1 }
+    for (let i = 0; i < 24; i++) {
+      const own = calendarWeeks(ym).filter((w) => w.band && !w.band.continued)
+      expect(own.map((w) => w.band?.event.name)).toEqual(monthEvents(ym).map((e) => e.event.name))
+      ym = nextMonth(ym)
     }
-    expect(planSilver(0).balance).toBe(1_000) // 216,000 − 215,000。5,000 に満たない端数
   })
 
-  it('紫晶石が足りていれば、交換したい量をそのまま交換できる', () => {
-    const p = planSilver(DEFAULT_DAMAGE)
-    expect([p.exchanges, p.amethystLimited, p.silverShortage]).toEqual([50, false, 45_000])
-    const q = planSilver(0, { gold: false, bounty: false }) // 必要 85,000 なら紫晶石 216,000 で足りる
-    expect([q.exchanges, q.amethystLimited, q.silverShortage]).toEqual([17, false, 0])
+  it('日付は 1 から月末まで、抜けも重複も無く並ぶ', () => {
+    for (const ym of [NOV, { year: 2026, month: 12 }, { year: 2027, month: 2 }, { year: 2028, month: 2 }]) {
+      const days = calendarWeeks(ym).flatMap((w) => w.days.filter((d): d is number => d !== null))
+      expect(days).toEqual(Array.from({ length: daysInMonth(ym) }, (_, i) => i + 1))
+    }
+  })
+})
+
+describe('planCalendar: 紫晶石の入手（SPEC §14.6）', () => {
+  it('11月は 月〜土 25日 × 9,000 ＋ 月曜 5回 × 20,500 ＝ 327,500', () => {
+    const [nov] = planCalendar(NOV, DEFAULT_DAMAGE)
+    expect([nov?.incomeDays, nov?.mondays, nov?.income]).toEqual([25, 5, 327_500])
   })
 
-  it('どの条件でも、銀塊の不足 ＝ 必要量 − 繰越 − 交換で手に入る銀塊（負にはならない）', () => {
-    for (const damage of [0, 10_000, 20_500]) {
-      for (const carry of [0, 45_000, 110_000, 295_000]) {
+  it('12月は 27日 × 9,000 ＋ 月曜 4回 × 20,500 ＝ 325,000', () => {
+    const dec = planCalendar(NOV, DEFAULT_DAMAGE)[1]
+    expect([dec?.incomeDays, dec?.mondays, dec?.income]).toEqual([27, 4, 325_000])
+  })
+
+  it('ダメージ報酬は月曜日の回数ぶんだけ効く', () => {
+    const [nov, dec] = planCalendar(NOV, 0)
+    expect([nov?.income, dec?.income]).toEqual([225_000, 243_000])
+  })
+})
+
+describe('planCalendar: 2026年11月・12月（SPEC §14.6 の例）', () => {
+  it('初期値・スイッチは両方オン', () => {
+    const p = planCalendar(NOV, DEFAULT_DAMAGE)
+    expect(p.map((m) => [m.year, m.month])).toEqual([
+      [2026, 11],
+      [2026, 12],
+    ])
+    expect(flow(p)).toEqual([
+      // 開始日, 名前, 繰越（入）, 入手量, 必要量, 不足分, 繰越（出）
+      ['11/3', '閃金', 0, 70_000, 180_000, 110_000, 0],
+      ['11/10', '百発百中', 0, 75_000, 25_000, 0, 50_000],
+      ['11/17', '戦争準備', 50_000, 75_000, 0, 0, 125_000],
+      ['11/24', '賞金稼ぎ', 125_000, 30_000, 90_000, 0, 65_000], // 11月の上限（50回）に達する
+      ['12/1', '閃金', 65_000, 45_000, 180_000, 70_000, 0], // 11/30 の紫晶石は持ち越さない
+      ['12/8', '百発百中', 0, 70_000, 25_000, 0, 45_000],
+      ['12/15', '戦争準備', 45_000, 75_000, 0, 0, 120_000],
+      ['12/22', '賞金稼ぎ', 120_000, 60_000, 90_000, 0, 90_000], // 12月の上限に達する
+      ['12/29', '閃金', 90_000, 0, 180_000, 90_000, 0],
+    ])
+    expect(summary(p)).toEqual([
+      // 必要量, 交換回数, 不足する銀塊, 入手量, 紫晶石の余り
+      [295_000, 50, 110_000, 327_500, 77_500],
+      [475_000, 50, 160_000, 325_000, 75_000],
+    ])
+    expect(p.map((m) => m.carryIn)).toEqual([0, 65_000]) // 2か月目は1か月目の月末の残りから始まる
+  })
+
+  it('賞金稼ぎのスイッチをオフ', () => {
+    const p = planCalendar(NOV, DEFAULT_DAMAGE, { bounty: false })
+    expect(summary(p)).toEqual([
+      [235_000, 50, 110_000, 327_500, 77_500],
+      [415_000, 50, 40_000, 325_000, 75_000],
+    ])
+    expect(flow(p).map((r) => [r[0], r[5]]).filter((r) => r[1] !== 0)).toEqual([
+      ['11/3', 110_000],
+      ['12/1', 10_000],
+      ['12/29', 30_000],
+    ])
+  })
+
+  it('閃金のスイッチをオフ（翌月ぶんを前倒しで交換するので、11月は上限まで使う）', () => {
+    const p = planCalendar(NOV, DEFAULT_DAMAGE, { gold: false })
+    expect(summary(p)).toEqual([
+      [145_000, 50, 0, 327_500, 77_500],
+      [175_000, 14, 0, 325_000, 255_000],
+    ])
+  })
+
+  it('スイッチを両方オフ（2か月ぶんを11月のうちに交換し終える）', () => {
+    const p = planCalendar(NOV, DEFAULT_DAMAGE, { gold: false, bounty: false })
+    expect(summary(p)).toEqual([
+      [85_000, 40, 0, 327_500, 127_500], // 85,000 ＋ 115,000 ＝ 200,000 を前倒しで交換
+      [115_000, 0, 0, 325_000, 325_000],
+    ])
+    expect(flow(p).map((r) => r[3])).toEqual([70_000, 75_000, 55_000, 0, 0, 0, 0, 0, 0])
+    expect(p[1]?.events.at(-1)?.carryOver).toBe(0) // ちょうど使い切る
+  })
+
+  it('前月繰越分 110,000（11/3 の閃金が足りる）', () => {
+    const p = planCalendar(NOV, DEFAULT_DAMAGE, {}, 110_000)
+    expect(flow(p)[0]).toEqual(['11/3', '閃金', 110_000, 70_000, 180_000, 0, 0])
+    expect(summary(p)).toEqual([
+      [295_000, 50, 0, 327_500, 77_500],
+      [475_000, 50, 160_000, 325_000, 75_000],
+    ])
+    expect(p.map((m) => m.carryIn)).toEqual([110_000, 65_000])
+  })
+
+  it('ダメージ報酬 0（紫晶石が足りず、上限まで交換できない）', () => {
+    const p = planCalendar(NOV, 0)
+    expect(summary(p)).toEqual([
+      [295_000, 45, 130_000, 225_000, 0],
+      [475_000, 48, 175_000, 243_000, 3_000],
+    ])
+    expect(p.map((m) => m.amethystLimited)).toEqual([true, true])
+  })
+
+  it('紫晶石が足りていれば amethystLimited は false', () => {
+    expect(planCalendar(NOV, DEFAULT_DAMAGE).map((m) => m.amethystLimited)).toEqual([false, false])
+  })
+})
+
+describe('planCalendar: ほかの月', () => {
+  it('2026年12月・2027年1月', () => {
+    const p = planCalendar({ year: 2026, month: 12 }, DEFAULT_DAMAGE)
+    expect(p.map((m) => [m.year, m.month])).toEqual([
+      [2026, 12],
+      [2027, 1],
+    ])
+    expect(flow(p)).toEqual([
+      ['12/1', '閃金', 0, 45_000, 180_000, 135_000, 0],
+      ['12/8', '百発百中', 0, 70_000, 25_000, 0, 45_000],
+      ['12/15', '戦争準備', 45_000, 75_000, 0, 0, 120_000],
+      ['12/22', '賞金稼ぎ', 120_000, 60_000, 90_000, 0, 90_000],
+      ['12/29', '閃金', 90_000, 0, 180_000, 90_000, 0],
+      ['1/5', '百発百中', 0, 90_000, 25_000, 0, 65_000], // 1/1〜1/2 の入手も、次のイベントの行に入る
+      ['1/12', '戦争準備', 65_000, 75_000, 0, 0, 140_000],
+      ['1/19', '賞金稼ぎ', 140_000, 75_000, 90_000, 0, 125_000],
+      ['1/26', '閃金', 125_000, 10_000, 180_000, 45_000, 0],
+    ])
+    expect(summary(p)).toEqual([
+      [475_000, 50, 225_000, 325_000, 75_000],
+      [295_000, 50, 45_000, 316_000, 66_000],
+    ])
+  })
+
+  it('2026年10月・11月（上限が残っていても、週の入手が足りなければ不足する）', () => {
+    const p = planCalendar({ year: 2026, month: 10 }, DEFAULT_DAMAGE)
+    expect(summary(p)).toEqual([
+      [295_000, 50, 80_000, 325_000, 75_000],
+      [295_000, 37, 75_000, 327_500, 142_500], // 上限は 13回残るが、11/3 の閃金に間に合わない
+    ])
+  })
+})
+
+describe('planCalendar: 不変条件', () => {
+  const cases = (): MonthPlan[][] => {
+    const out: MonthPlan[][] = []
+    let ym: YearMonth = { year: 2026, month: 1 }
+    for (let i = 0; i < 18; i++) {
+      for (const damage of [0, 20_500, 100_000]) {
         for (const gold of [true, false]) {
-          const p = planSilver(damage, { gold }, carry)
-          expect(p.silverShortage).toBe(Math.max(0, p.monthlyNeed - carry - p.exchangeAmount))
-          expect(p.exchanges).toBeLessThanOrEqual(EXCHANGE_LIMIT)
-        }
-      }
-    }
-  })
-})
-
-describe('planSilver: 4週間の流れ（SPEC §14.6。数字はすべて銀塊）', () => {
-  it('初期値・すべて交換（SPEC §14.6 の表）', () => {
-    const p = planSilver(DEFAULT_DAMAGE)
-    expect(p.weeks.map((w) => w.event.name)).toEqual(['閃金', '百発百中', '戦争準備', '賞金稼ぎ'])
-    expect(flow(p)).toEqual([
-      // 必要量, 入手量, 交換回数, 不足分, 繰越量
-      [180_000, 70_000, 14, 110_000, 0],
-      [25_000, 75_000, 15, 0, 50_000],
-      [0, 75_000, 15, 0, 125_000],
-      [90_000, 30_000, 6, 0, 65_000], // 月の上限（50回）に達するので 6回まで
-    ])
-  })
-
-  it('入手量の合計は今月交換する量と同じで、交換回数の合計も一致する', () => {
-    for (const [gold, bounty, carry] of [
-      [true, true, 0],
-      [true, false, 0],
-      [false, true, 0],
-      [false, false, 0],
-      [true, true, 65_000],
-      [true, true, 110_000],
-      [true, false, 110_000],
-      [true, true, 295_000],
-      [false, false, 3_000],
-    ] as const) {
-      const p = planSilver(DEFAULT_DAMAGE, { gold, bounty }, carry)
-      expect(p.weeks.reduce((s, w) => s + w.gain, 0)).toBe(p.exchangeAmount)
-      expect(p.weeks.reduce((s, w) => s + w.gainTimes, 0)).toBe(p.exchanges)
-    }
-  })
-
-  it('入手量は 5,000 きざみで、端数の紫晶石は翌週に回る', () => {
-    const p = planSilver(DEFAULT_DAMAGE)
-    for (const w of p.weeks) expect(w.gain % EXCHANGE_UNIT).toBe(0)
-    // 1週目は 74,500 → 70,000（端数 4,500）。2週目は 4,500 + 74,500 = 79,000 → 75,000
-    expect(p.weeks.map((w) => w.gain).slice(0, 2)).toEqual([70_000, 75_000])
-  })
-
-  it('銀塊の出入りが合う: 繰越 ＋ 入手 ＝ 使えたぶん ＋ 次への繰越', () => {
-    for (const carry of [0, 3_000, 65_000, 110_000, 295_000]) {
-      for (const gold of [true, false]) {
-        for (const bounty of [true, false]) {
-          const p = planSilver(DEFAULT_DAMAGE, { gold, bounty }, carry)
-          let silver = carry
-          for (const w of p.weeks) {
-            const used = w.use - w.shortfall // 実際に使えたぶん
-            expect(silver + w.gain).toBe(used + w.carryOver)
-            // 不足と繰越が同時に出ることはない
-            expect(w.shortfall === 0 || w.carryOver === 0).toBe(true)
-            silver = w.carryOver
+          for (const carry of [0, 45_000, 300_000]) {
+            out.push(planCalendar(ym, damage, { gold }, carry))
           }
         }
       }
+      ym = nextMonth(ym)
     }
-  })
+    return out
+  }
 
-  it('月全体の不足: 週の不足分の合計 − 月末の繰越 ＝ 上限で足りない量（紫晶石が足りているとき）', () => {
-    const p = planSilver(DEFAULT_DAMAGE)
-    const shortfall = p.weeks.reduce((s, w) => s + w.shortfall, 0)
-    expect(shortfall).toBe(110_000)
-    expect(shortfall - (p.weeks[3]?.carryOver ?? 0)).toBe(p.silverShortage) // 110,000 − 65,000 = 45,000
-  })
-
-  it('閃金だけ任意を入れる（賞金稼ぎはお金で上限まで買わない）', () => {
-    const p = planSilver(DEFAULT_DAMAGE, { bounty: false })
-    expect([p.monthlyNeed, p.exchanges, p.balance]).toEqual([235_000, 47, 63_000])
-    expect(flow(p)).toEqual([
-      [180_000, 70_000, 14, 110_000, 0],
-      [25_000, 75_000, 15, 0, 50_000],
-      [0, 75_000, 15, 0, 125_000],
-      [30_000, 15_000, 3, 0, 110_000],
-    ])
-  })
-
-  it('賞金稼ぎだけ任意を入れる（閃金はお金で上限まで買わない）', () => {
-    const p = planSilver(DEFAULT_DAMAGE, { gold: false })
-    expect([p.monthlyNeed, p.exchanges, p.balance]).toEqual([145_000, 29, 153_000])
-    // 今月ぶん（145,000）に達したら、それ以上は交換しない
-    expect(flow(p)).toEqual([
-      [30_000, 70_000, 14, 0, 40_000],
-      [25_000, 75_000, 15, 0, 90_000],
-      [0, 0, 0, 0, 90_000],
-      [90_000, 0, 0, 0, 0],
-    ])
-  })
-
-  it('任意を入れないなら、不足は出ない', () => {
-    const p = planSilver(DEFAULT_DAMAGE, { gold: false, bounty: false })
-    expect(flow(p)).toEqual([
-      [30_000, 70_000, 14, 0, 40_000],
-      [25_000, 15_000, 3, 0, 30_000],
-      [0, 0, 0, 0, 30_000],
-      [30_000, 0, 0, 0, 0],
-    ])
-  })
-
-  it('紫晶石が足りないと、今月交換するぶんに届かない', () => {
-    const p = planSilver(0) // 入手は週 54,000
-    expect(flow(p)).toEqual([
-      [180_000, 50_000, 10, 130_000, 0],
-      [25_000, 55_000, 11, 0, 30_000],
-      [0, 55_000, 11, 0, 85_000],
-      [90_000, 55_000, 11, 0, 50_000],
-    ])
-    expect(p.weeks.reduce((s, w) => s + w.gain, 0)).toBe(215_000) // 交換したい 250,000 に届かない
-  })
-})
-
-describe('planSilver: 前の週からの繰越（carryIn）', () => {
-  it('1週目は前月繰越分、2週目からは前の週の繰越量', () => {
-    for (const carry of [0, 65_000, 110_000, 295_000]) {
-      const p = planSilver(DEFAULT_DAMAGE, {}, carry)
-      expect(p.weeks[0]?.carryIn).toBe(carry)
-      for (let i = 1; i < p.weeks.length; i++) {
-        expect(p.weeks[i]?.carryIn).toBe(p.weeks[i - 1]?.carryOver)
+  it('銀塊の出入りが合う: 繰越（入）＋ 入手 − 必要 ＝ 繰越（出）− 不足分', () => {
+    for (const months of cases()) {
+      for (const e of months.flatMap((m) => m.events)) {
+        expect(e.carryIn + e.gain - e.use).toBe(e.carryOver - e.shortfall)
+        expect(e.shortfall === 0 || e.carryOver === 0).toBe(true)
+        expect(e.gain).toBe(e.gainTimes * EXCHANGE_UNIT)
       }
     }
   })
 
-  it('どの週も 繰越（入）＋ 入手 − 必要 ＝ 繰越（出）− 不足分 になる', () => {
-    for (const carry of [0, 3_000, 65_000, 110_000]) {
-      for (const gold of [true, false]) {
-        for (const bounty of [true, false]) {
-          for (const w of planSilver(DEFAULT_DAMAGE, { gold, bounty }, carry).weeks) {
-            expect(w.carryIn + w.gain - w.use).toBe(w.carryOver - w.shortfall)
+  it('前のイベントの繰越（出）が、次のイベントの繰越（入）になる（月をまたいでも）', () => {
+    for (const months of cases()) {
+      const events = months.flatMap((m) => m.events)
+      for (let i = 1; i < events.length; i++) {
+        expect(events[i]?.carryIn).toBe(events[i - 1]?.carryOver)
+      }
+      // 2か月目の月初の銀塊は、1か月目の最後のイベントの繰越以上になる
+      // （最後の精算のあと、月末までに前倒しで交換したぶんが上乗せされることがある）
+      const lastCarry = months[0]?.events.at(-1)?.carryOver ?? 0
+      expect(months[1]?.carryIn ?? 0).toBeGreaterThanOrEqual(lastCarry)
+      expect(((months[1]?.carryIn ?? 0) - lastCarry) % EXCHANGE_UNIT).toBe(0)
+    }
+  })
+
+  it('例: 11/30（月）に前倒しで交換したぶんは、12月の月初の銀塊に入る', () => {
+    // ダメージ報酬 0・閃金オフだと、上限が月末まで残り、11/30 にも交換が続く
+    const p = planCalendar({ year: 2026, month: 11 }, 0, { gold: false })
+    const last = p[0]?.events.at(-1)?.carryOver ?? 0
+    expect((p[1]?.carryIn ?? 0) - last).toBe(10_000) // 手持ちの端数 ＋ 11/30 の 9,000 で2回交換
+    expect(p[1]?.events[0]?.carryIn).toBe(last)
+    expect(p[1]?.events[0]?.gain).toBeGreaterThanOrEqual(5_000) // そのぶんは 12/1 のイベントの入手量に入る
+  })
+
+  it('交換回数は月 50 回を超えず、紫晶石の余りは負にならない', () => {
+    for (const months of cases()) {
+      for (const m of months) {
+        expect(m.exchanges).toBeLessThanOrEqual(EXCHANGE_LIMIT)
+        expect(m.exchangeAmount).toBe(m.exchanges * EXCHANGE_UNIT)
+        expect(m.balance).toBe(m.income - m.exchangeAmount)
+        expect(m.balance).toBeGreaterThanOrEqual(0)
+      }
+    }
+  })
+
+  it('イベントの入手量の合計は、2か月の交換量の合計と同じ', () => {
+    for (const months of cases()) {
+      const gained = months.flatMap((m) => m.events).reduce((s, e) => s + e.gain, 0)
+      expect(gained).toBe(months.reduce((s, m) => s + m.exchangeAmount, 0))
+    }
+  })
+
+  it('月の必要量と不足は、その月のイベントの合計', () => {
+    for (const months of cases()) {
+      for (const m of months) {
+        expect(m.need).toBe(m.events.reduce((s, e) => s + e.use, 0))
+        expect(m.silverShortage).toBe(m.events.reduce((s, e) => s + e.shortfall, 0))
+      }
+    }
+  })
+
+  it('必要以上には交換しない（2か月の終わりに残る銀塊は、5,000 に満たない端数だけ）', () => {
+    for (const months of cases()) {
+      const start = months[0]?.carryIn ?? 0
+      const left = months[1]?.events.at(-1)?.carryOver ?? 0
+      // 前月繰越分がもともと余っている場合を除く
+      const need = months.reduce((s, m) => s + m.need, 0)
+      if (start <= need) expect(left).toBeLessThan(EXCHANGE_UNIT)
+    }
+  })
+
+  it('指定が無いイベントは「上限まで買う」として扱い、指定しなければ繰越は 0', () => {
+    const p = planCalendar(NOV, DEFAULT_DAMAGE)
+    expect(p[0]?.need).toBe(295_000)
+    expect(p[0]?.carryIn).toBe(DEFAULT_CARRY)
+    expect(p[0]?.events.map((e) => e.optionalUse)).toEqual([150_000, 0, 0, 60_000])
+  })
+})
+
+describe('recommendedCarry（その月に不足を出さないための、月初の銀塊。SPEC §14.6）', () => {
+  const DEC: YearMonth = { year: 2026, month: 12 }
+
+  it.each<[string, Record<string, boolean>, number, number]>([
+    ['両方オン', {}, DEFAULT_DAMAGE, 225_000], // 必要 475,000 − 上限 250,000
+    ['賞金稼ぎオフ', { bounty: false }, DEFAULT_DAMAGE, 165_000], // 必要 415,000 − 250,000
+    ['閃金オフ', { gold: false }, DEFAULT_DAMAGE, 0],
+    ['両方オフ', { gold: false, bounty: false }, DEFAULT_DAMAGE, 0],
+    ['ダメージ報酬 0', {}, 0, 235_000], // 紫晶石が足りず 48回（240,000）までしか交換できない
+  ])('2026年12月・%s → %i', (_label, buyAll, damage, expected) => {
+    expect(recommendedCarry(DEC, damage, buyAll)).toBe(expected)
+  })
+
+  it('月によって変わる（11月は閃金の週に間に合わせる 110,000、2027年1月は 45,000）', () => {
+    expect(recommendedCarry(NOV, DEFAULT_DAMAGE)).toBe(110_000)
+    expect(recommendedCarry({ year: 2027, month: 1 }, DEFAULT_DAMAGE)).toBe(45_000)
+  })
+
+  it('その量を持っていれば不足せず、5,000 少ないと不足する（最小である）', () => {
+    let ym: YearMonth = { year: 2026, month: 1 }
+    for (let i = 0; i < 18; i++) {
+      for (const damage of [0, 20_500]) {
+        for (const gold of [true, false]) {
+          const carry = recommendedCarry(ym, damage, { gold })
+          expect(carry % EXCHANGE_UNIT).toBe(0)
+          expect(planCalendar(ym, damage, { gold }, carry)[0]?.silverShortage).toBe(0)
+          if (carry > 0) {
+            expect(
+              planCalendar(ym, damage, { gold }, carry - EXCHANGE_UNIT)[0]?.silverShortage,
+            ).toBeGreaterThan(0)
           }
         }
       }
+      ym = nextMonth(ym)
     }
   })
 
-  it('初期状態の繰越（入）', () => {
-    expect(planSilver(DEFAULT_DAMAGE).weeks.map((w) => w.carryIn)).toEqual([0, 0, 50_000, 125_000])
-  })
-})
-
-describe('planSilver: 4週間の流れと前月繰越分', () => {
-  it('前月繰越分は1週目から使える', () => {
-    // 前月の4週目の繰越量（65,000）を入れた翌月
-    const p = planSilver(DEFAULT_DAMAGE, {}, 65_000)
-    expect([p.exchanges, p.silverShortage]).toEqual([46, 0])
-    expect(flow(p)).toEqual([
-      [180_000, 70_000, 14, 45_000, 0], // 65,000 + 70,000 = 135,000 で、まだ 45,000 足りない
-      [25_000, 75_000, 15, 0, 50_000],
-      [0, 75_000, 15, 0, 125_000],
-      [90_000, 10_000, 2, 0, 45_000],
+  it('繰越推奨量 − いまの見込みの繰越 が、来月を足りさせるのに足りない量', () => {
+    const [, dec] = planCalendar(NOV, DEFAULT_DAMAGE)
+    const recommended = recommendedCarry(DEC, DEFAULT_DAMAGE)
+    expect([recommended, dec?.carryIn, recommended - (dec?.carryIn ?? 0)]).toEqual([
+      225_000, 65_000, 160_000,
     ])
-  })
-
-  it('繰越が 110,000 あれば、閃金の週も足りる', () => {
-    const p = planSilver(DEFAULT_DAMAGE, {}, 110_000)
-    expect(flow(p)).toEqual([
-      [180_000, 70_000, 14, 0, 0], // 110,000 + 70,000 = 180,000 ちょうど
-      [25_000, 75_000, 15, 0, 50_000],
-      [0, 40_000, 8, 0, 90_000],
-      [90_000, 0, 0, 0, 0],
-    ])
-    expect(p.weeks.every((w) => w.shortfall === 0)).toBe(true)
-  })
-
-  it('繰越だけで足りるなら交換せず、使ったぶんだけ繰越が減っていく', () => {
-    const p = planSilver(DEFAULT_DAMAGE, {}, 295_000)
-    expect(flow(p)).toEqual([
-      [180_000, 0, 0, 0, 115_000],
-      [25_000, 0, 0, 0, 90_000],
-      [0, 0, 0, 0, 90_000],
-      [90_000, 0, 0, 0, 0],
-    ])
-  })
-
-  it('5,000 の倍数でない繰越は、使い切れずに残る', () => {
-    // 必要 85,000 − 繰越 3,000 = 82,000 → 17回（85,000）交換するので、3,000 が残る
-    const p = planSilver(DEFAULT_DAMAGE, { gold: false, bounty: false }, 3_000)
-    expect(p.weeks[3]?.carryOver).toBe(3_000)
-  })
-
-  // 翌月のための前倒しはしない（SPEC §14.6）。今月の必要量ぶんしか交換しないので、
-  // 月末の繰越が翌月の閃金に足りるかは、4週目の繰越量を見て利用者が判断する
-  it('月末の繰越量を翌月の前月繰越分に入れると、続きの月を計算できる', () => {
-    const first = planSilver(DEFAULT_DAMAGE, { bounty: false })
-    const carry = first.weeks[3]?.carryOver ?? 0
-    expect(carry).toBe(110_000)
-    const second = planSilver(DEFAULT_DAMAGE, { bounty: false }, carry)
-    expect(flow(second)).toEqual([
-      [180_000, 70_000, 14, 0, 0],
-      [25_000, 55_000, 11, 0, 30_000],
-      [0, 0, 0, 0, 30_000],
-      [30_000, 0, 0, 0, 0],
-    ])
-  })
-})
-
-describe('前月繰越分（SPEC §14.6）', () => {
-  it.each<[number, number, number, number, number]>([
-    // 繰越, 交換回数, 交換に使う紫晶石, 銀塊の不足, 紫晶石の余り
-    [0, 50, 250_000, 45_000, 48_000],
-    [10_000, 50, 250_000, 35_000, 48_000],
-    [44_999, 50, 250_000, 1, 48_000],
-    [45_000, 50, 250_000, 0, 48_000], // ちょうど上限いっぱいで足りる
-    [45_001, 50, 250_000, 0, 48_000], // 249,999 は 50回に切り上げ
-    [50_000, 49, 245_000, 0, 53_000],
-    [100_000, 39, 195_000, 0, 103_000],
-    [295_000, 0, 0, 0, 298_000], // 繰越だけで足りる
-    [400_000, 0, 0, 0, 298_000], // 必要量より多くても負にならない
-  ])('繰越 %i → 交換 %i 回（%i）、銀塊の不足 %i、紫晶石の余り %i', (carry, times, amount, shortage, balance) => {
-    const p = planSilver(DEFAULT_DAMAGE, {}, carry)
-    expect([p.carry, p.exchanges, p.exchangeAmount, p.silverShortage, p.balance]).toEqual([
-      carry,
-      times,
-      amount,
-      shortage,
-      balance,
-    ])
-  })
-
-  it('必要量そのものは繰越で変わらない', () => {
-    expect(planSilver(DEFAULT_DAMAGE, {}, 100_000).monthlyNeed).toBe(295_000)
-  })
-
-  it('紫晶石が足りているときの不足の条件は「必要量 − 繰越 > 250,000」', () => {
-    for (const carry of [0, 44_999, 45_000, 45_001]) {
-      const p = planSilver(DEFAULT_DAMAGE, {}, carry)
-      expect(p.silverShortage > 0).toBe(p.monthlyNeed - carry > MONTHLY_CAP)
-      expect(p.silverShortage).toBe(Math.max(0, p.monthlyNeed - carry - MONTHLY_CAP))
-    }
-  })
-
-  it('指定しなければ繰越は 0', () => {
-    expect(planSilver(DEFAULT_DAMAGE).carry).toBe(0)
+    expect(dec?.silverShortage).toBe(160_000)
   })
 })
 
