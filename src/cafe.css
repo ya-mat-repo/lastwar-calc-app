@@ -740,9 +740,31 @@ html[data-theme='cafe'] body {
   --band: #6f6388;
 }
 
-/* 前の月に始まったイベントの続きは薄くする（この月のイベントには数えない） */
+/* 前の月に始まったイベントの続き（この月のイベントには数えない）。
+   帯ごと薄くすると文字まで読みにくくなるので、地の色だけ薄めて文字は濃い色にする */
 .cafe .cal__band--continued {
-  opacity: 0.45;
+  color: var(--ink);
+  background-color: var(--paper-edge);
+  background-color: color-mix(in srgb, var(--band, var(--caramel)) 30%, var(--paper));
+}
+
+/* 1日ぶんの帯。列の幅（360px の画面で 40px ほど）に4文字の名前が収まるよう、字を小さくする */
+.cafe .cal__band--narrow {
+  font-size: 9px;
+  letter-spacing: 0;
+}
+
+/* 見た目には出さず、読み上げにだけ伝える文字 */
+.cafe .visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .cafe .cal__band small {

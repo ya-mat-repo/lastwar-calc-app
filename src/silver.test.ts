@@ -5,6 +5,7 @@ import {
   EVENT_ORIGIN,
   EXCHANGE_LIMIT,
   EXCHANGE_UNIT,
+  INCOME_DAYS_PER_WEEK,
   MAX_CARRY,
   MAX_DAMAGE,
   MONTHLY_CAP,
@@ -19,12 +20,12 @@ import {
   mustTotal,
   nextMonth,
   optionalTotal,
-  parseCarry,
   parseDamage,
   planCalendar,
   recommendedCarry,
   snapCarry,
   todayYmd,
+  weeklyIncome,
 } from './silver'
 import type { MonthPlan, YearMonth, Ymd } from './silver'
 
@@ -257,6 +258,25 @@ describe('暦の小さな関数', () => {
   it('毎日の入手は 連盟対決報酬 6,500 ＋ 晶石ボス 2,500 ＝ 9,000', () => {
     expect(dailyIncome()).toBe(9_000)
   })
+
+  it('1週間の入手は 9,000 × 6日 ＋ ダメージ報酬', () => {
+    expect(INCOME_DAYS_PER_WEEK).toBe(6)
+    expect(weeklyIncome(20_500)).toBe(74_500)
+    expect(weeklyIncome(0)).toBe(54_000)
+  })
+
+  it('月の入手日数は、日曜日を除いた日数と一致する', () => {
+    let ym: YearMonth = { year: 2026, month: 1 }
+    for (let i = 0; i < 24; i++) {
+      const days = Array.from({ length: daysInMonth(ym) }, (_, d) =>
+        new Date(Date.UTC(ym.year, ym.month - 1, d + 1)).getUTCDay(),
+      )
+      const [plan] = planCalendar(ym, 0)
+      expect(plan.incomeDays).toBe(days.filter((w) => w !== 0).length)
+      expect(plan.mondays).toBe(days.filter((w) => w === 1).length)
+      ym = nextMonth(ym)
+    }
+  })
 })
 
 describe('calendarWeeks（月曜始まりのカレンダーと、イベントの帯）', () => {
@@ -404,9 +424,48 @@ describe('planCalendar: 2026年11月・12月（SPEC §14.6 の例）', () => {
     ])
     expect(p.map((m) => m.amethystLimited)).toEqual([true, true])
   })
+})
 
-  it('紫晶石が足りていれば amethystLimited は false', () => {
-    expect(planCalendar(NOV, DEFAULT_DAMAGE).map((m) => m.amethystLimited)).toEqual([false, false])
+describe('planCalendar: amethystLimited（不足が紫晶石のせいかどうか）', () => {
+  it('紫晶石が足りていれば false（不足が上限のせいのとき）', () => {
+    const p = planCalendar(NOV, DEFAULT_DAMAGE)
+    expect(p.map((m) => [m.silverShortage > 0, m.amethystLimited])).toEqual([
+      [true, false],
+      [true, false],
+    ])
+  })
+
+  // 来月ぶんの前倒しができないだけで、今月は足りている月には出さない
+  it('その月が足りていれば、紫晶石が少なくても false', () => {
+    const [jan] = planCalendar({ year: 2025, month: 1 }, 0, {}, 110_000)
+    expect([jan.silverShortage, jan.exchanges, jan.amethystLimited]).toEqual([0, 48, false])
+  })
+
+  // 上限は残っているが、週の入手が間に合わないだけの月には出さない
+  it('週の入手が間に合わないだけの不足では false', () => {
+    const [, nov] = planCalendar({ year: 2026, month: 10 }, DEFAULT_DAMAGE)
+    expect([nov.silverShortage, nov.exchanges, nov.amethystLimited]).toEqual([75_000, 37, false])
+  })
+
+  it('どの条件でも、true なら その月に不足があり、月の入手で交換できる回数が上限に届いていない', () => {
+    let ym: YearMonth = { year: 2025, month: 1 }
+    let seen = 0
+    for (let i = 0; i < 24; i++) {
+      for (const damage of [0, 5_000, 20_500]) {
+        for (const gold of [true, false]) {
+          for (const carry of [0, 110_000]) {
+            for (const m of planCalendar(ym, damage, { gold }, carry)) {
+              if (!m.amethystLimited) continue
+              seen++
+              expect(m.silverShortage).toBeGreaterThan(0)
+              expect(Math.floor(m.income / EXCHANGE_UNIT)).toBeLessThan(EXCHANGE_LIMIT)
+            }
+          }
+        }
+      }
+      ym = nextMonth(ym)
+    }
+    expect(seen).toBeGreaterThan(0)
   })
 })
 
@@ -600,19 +659,5 @@ describe('snapCarry（前月繰越分を 5,000 きざみ・0〜上限にそろ�
 
   it('上限は 5,000 の倍数', () => {
     expect(MAX_CARRY % EXCHANGE_UNIT).toBe(0)
-  })
-})
-
-describe('parseCarry', () => {
-  it.each<[string, number | null, boolean]>([
-    ['0', 0, false],
-    ['45,000', 45000, false],
-    ['４５０００', 45000, false],
-    ['', null, true],
-    ['-1', null, true],
-    ['1.5', null, true],
-    ['10000000', null, true],
-  ])('%o → value=%o invalid=%o', (input, value, invalid) => {
-    expect(parseCarry(input)).toEqual({ value, invalid })
   })
 })

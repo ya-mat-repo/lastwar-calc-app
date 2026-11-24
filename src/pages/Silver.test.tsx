@@ -7,12 +7,15 @@
  * 画面は開いた日の今月と来月を出すので、日付は 2026-11-25 に固定する
  * （SPEC §14.6 の例と同じ 2026年11月・12月になる）。
  */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import Silver from './Silver'
 import type { Ymd } from '../silver'
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  vi.useRealTimers()
+})
 beforeEach(() => localStorage.clear())
 
 const TODAY: Ymd = { year: 2026, month: 11, day: 25 }
@@ -23,10 +26,12 @@ const CARRY_KEY = 'lastwar-silver:carry'
 const BUYALL_KEY = 'lastwar-silver:buyall:gold'
 const BUYALL_BOUNTY_KEY = 'lastwar-silver:buyall:bounty'
 
-/** 前月繰越分を入れた状態で開く（大きな値は ＋ を何十回も押す代わりに、保存値から始める） */
+/** 前月繰越分を入れた状態で開く。繰越分は保存されないので、＋ を必要な回数だけ押す */
 const openWithCarry = (carry: number): ReturnType<typeof render> => {
-  localStorage.setItem(CARRY_KEY, String(carry))
-  return open()
+  const view = open()
+  const plus = screen.getByRole('button', { name: '前月繰越分の銀塊量を 5,000 増やす' })
+  for (let i = 0; i < carry / 5_000; i++) fireEvent.click(plus)
+  return view
 }
 
 const damageInput = (): HTMLInputElement =>
@@ -148,7 +153,7 @@ describe('Silver: イベントカレンダー', () => {
   it('11月: 火〜日にイベントの帯が引かれる', () => {
     open()
     expect(calendar('2026年11月')).toEqual([
-      '-- -- -- -- -- -- 1 | 賞金稼ぎ×1', // 10/27 に始まった賞金稼ぎの最終日
+      '-- -- -- -- -- -- 1 | 賞金稼ぎ（前月から）×1', // 10/27 に始まった賞金稼ぎの最終日（読み上げ用の文字を含む）
       '2 3 4 5 6 7 8 | 閃金×6',
       '9 10 11 12 13 14 15 | 百発百中×6',
       '16 17 18 19 20 21 22 | 戦争準備×6',
@@ -175,6 +180,17 @@ describe('Silver: イベントカレンダー', () => {
     // この月に始まったイベントの帯には付かない
     const own = [...screen.getByRole('table', { name: '2026年12月' }).querySelectorAll('.cal__band')]
     expect(own.some((b) => b.className.includes('continued'))).toBe(false)
+  })
+
+  it('1日ぶんの帯は字を小さくし、「前月から」は読み上げにだけ伝える', () => {
+    open()
+    const first = screen.getByRole('table', { name: '2026年11月' }).querySelector('.cal__band')
+    expect(first?.className).toContain('cal__band--narrow')
+    expect(first?.querySelector('.visually-hidden')?.textContent).toBe('（前月から）')
+    expect(first?.querySelector('small')).toBeNull()
+    // 6日ぶんの帯には付かない
+    const full = [...screen.getByRole('table', { name: '2026年12月' }).querySelectorAll('.cal__band')]
+    expect(full.slice(0, 4).some((b) => b.className.includes('narrow'))).toBe(false)
   })
 
   it('3日以上続く「続き」の帯には（前月から）と添える', () => {
@@ -534,7 +550,9 @@ describe('Silver: 前月繰越分の銀塊量', () => {
     // 入力欄はダメージ報酬の1つだけ
     expect(card('あなたの条件').querySelectorAll('input[type="text"]')).toHaveLength(1)
     expect(
-      screen.getByText('今月の1日の時点で持っていた銀塊の数です。＋ − で 5,000 ずつ変えられます。'),
+      screen.getByText(
+        '今月の1日の時点で持っていた銀塊の数です。＋ − で 5,000 ずつ変えられます（保存はされません）。',
+      ),
     ).toBeTruthy()
   })
 
@@ -561,40 +579,30 @@ describe('Silver: 前月繰越分の銀塊量', () => {
     expect(carryMinus().disabled).toBe(true)
   })
 
-  it('上限（9,995,000）で ＋ を押せなくなる', () => {
-    openWithCarry(9_990_000)
-    fireEvent.click(carryPlus())
-    expect(carryValue()).toBe('9,995,000')
-    expect(carryPlus().disabled).toBe(true)
-  })
-
   it('繰越 110,000 なら、11/3 の閃金が足りる', () => {
     openWithCarry(110_000)
     expect(flow()[0]).toEqual(['11/3〜11/8', '閃金', '110,000', '70,000', '180,000', '次週への繰越', '0'])
     expect(alertText(NOV)).toBeNull()
   })
 
-  it('保存され、再マウントで復元される。0 に戻すと保存も消える', async () => {
+  // 月ごとに変わる値なので、ブラウザには保存しない（SPEC §14.5）
+  it('保存されず、開き直すと 0 に戻る', async () => {
     const first = open()
     fireEvent.click(carryPlus())
-    await waitFor(() => expect(localStorage.getItem(CARRY_KEY)).toBe('5000'))
+    fireEvent.click(carryPlus())
+    expect(carryValue()).toBe('10,000')
+    expect(localStorage.getItem(CARRY_KEY)).toBeNull()
     first.unmount()
 
     open()
-    expect(carryValue()).toBe('5,000')
-    fireEvent.click(carryMinus())
-    await waitFor(() => expect(localStorage.getItem(CARRY_KEY)).toBeNull())
+    expect(carryValue()).toBe('0')
   })
 
-  it.each<[string, string]>([
-    ['12345', '10,000'], // 以前は手入力できたので、5,000 の倍数でない値が残っていることがある
-    ['abc', '0'],
-    ['-5000', '0'],
-    ['99999999', '0'], // 上限を超えた値は不正として初期値にする
-  ])('保存されていた値 %o は %s として始める', (stored, shown) => {
-    localStorage.setItem(CARRY_KEY, stored)
+  it('以前のバージョンで保存されていた値は使わず、消す', async () => {
+    localStorage.setItem(CARRY_KEY, '110000')
     open()
-    expect(carryValue()).toBe(shown)
+    expect(carryValue()).toBe('0')
+    await waitFor(() => expect(localStorage.getItem(CARRY_KEY)).toBeNull())
   })
 })
 
@@ -628,6 +636,15 @@ describe('Silver: ダメージ報酬', () => {
 
   it('紫晶石が足りていれば、紫晶石の注意は出ない', () => {
     open()
+    expect(document.querySelector('.cafe__note--warn')).toBeNull()
+  })
+
+  // 来月ぶんの前倒しができないだけで、今月は足りているときには出さない
+  it('今月が足りていれば、紫晶石が少なくても注意は出ない', () => {
+    openWithCarry(130_000) // ダメージ報酬 0 のときの 11/3 の不足ぶんを、繰越で埋める
+    typeDamage('0')
+    expect(alertText(NOV)).toBeNull()
+    expect(exchanges(NOV)).toBe('45 / 50回') // 紫晶石は使い切っているが、今月は足りている
     expect(document.querySelector('.cafe__note--warn')).toBeNull()
   })
 
@@ -766,10 +783,81 @@ describe('Silver: 保存と復元', () => {
 })
 
 describe('Silver: 今日の日付', () => {
+  /** 端末の時計を固定する（日付を渡さずに開いたときの動きを見るため） */
+  const setClock = (year: number, month: number, day: number): void => {
+    vi.setSystemTime(new Date(year, month - 1, day, 12, 0, 0))
+  }
+  const captions = (): (string | null | undefined)[] =>
+    screen.getAllByRole('table').map((t) => t.querySelector('caption')?.textContent)
+  const comeBack = (): void => {
+    act(() => {
+      window.dispatchEvent(new Event('focus'))
+    })
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+  })
+
   it('日付を渡さなければ、端末の今日の月から始まる', () => {
+    setClock(2026, 11, 30)
     render(<Silver />)
-    const now = new Date()
-    const caption = `${now.getFullYear()}年${now.getMonth() + 1}月`
-    expect(screen.getAllByRole('table')[0]?.querySelector('caption')?.textContent).toBe(caption)
+    expect(captions()).toEqual(['2026年11月', '2026年12月'])
+    expect(document.querySelector('[aria-current="date"]')?.textContent).toBe('30')
+  })
+
+  // ページは一度開くと隠されるだけで残るので、開いたまま月が替わることがある
+  it('開いたまま月が替わってから戻ってくると、新しい月で計算し直す', () => {
+    setClock(2026, 11, 30)
+    render(<Silver />)
+    expect(screen.getByRole('heading', { level: 2, name: '11月の必要量' })).toBeTruthy()
+
+    setClock(2026, 12, 1)
+    comeBack()
+    expect(captions()).toEqual(['2026年12月', '2027年1月'])
+    expect(screen.getByRole('heading', { level: 2, name: '12月の必要量' })).toBeTruthy()
+    expect(screen.queryByRole('heading', { level: 2, name: '11月の必要量' })).toBeNull()
+    expect(document.querySelector('[aria-current="date"]')?.textContent).toBe('1')
+  })
+
+  it('月が替わったら、前月繰越分は前の月のものなので 0 に戻す', () => {
+    setClock(2026, 11, 30)
+    render(<Silver />)
+    fireEvent.click(carryPlus())
+    fireEvent.click(carryPlus())
+    expect(carryValue()).toBe('10,000')
+
+    setClock(2026, 12, 1)
+    comeBack()
+    expect(carryValue()).toBe('0')
+  })
+
+  it('同じ月のうちに日付だけ進んだときは、今日の印だけ動き、前月繰越分は残る', () => {
+    setClock(2026, 11, 25)
+    render(<Silver />)
+    fireEvent.click(carryPlus())
+
+    setClock(2026, 11, 26)
+    comeBack()
+    expect(document.querySelector('[aria-current="date"]')?.textContent).toBe('26')
+    expect(carryValue()).toBe('5,000')
+    expect(captions()).toEqual(['2026年11月', '2026年12月'])
+  })
+
+  it('ほかのページから戻ってきたとき（URL が変わったとき）にも確かめ直す', () => {
+    setClock(2026, 11, 30)
+    render(<Silver />)
+    setClock(2026, 12, 1)
+    act(() => {
+      window.dispatchEvent(new HashChangeEvent('hashchange'))
+    })
+    expect(captions()).toEqual(['2026年12月', '2027年1月'])
+  })
+
+  it('日付を渡したときは、時計が進んでもその日付のまま', () => {
+    setClock(2027, 5, 5)
+    open()
+    comeBack()
+    expect(captions()).toEqual(['2026年11月', '2026年12月'])
   })
 })

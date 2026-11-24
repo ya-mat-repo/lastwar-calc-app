@@ -127,11 +127,6 @@ export function parseDamage(raw: string): { value: number | null; invalid: boole
   return parseIntInRange(raw, 0, MAX_DAMAGE)
 }
 
-/** 保存されていた前月繰越分を解釈する。受け付けるのは 0〜MAX_CARRY の整数だけ */
-export function parseCarry(raw: string): { value: number | null; invalid: boolean } {
-  return parseIntInRange(raw, 0, MAX_CARRY)
-}
-
 /** 前月繰越分を 0〜MAX_CARRY の範囲に収め、EXCHANGE_UNIT の倍数に切り下げる */
 export function snapCarry(carry: number): number {
   const clamped = Math.min(MAX_CARRY, Math.max(0, carry))
@@ -276,6 +271,15 @@ export function calendarWeeks(ym: YearMonth): CalendarWeek[] {
 /** 月〜土の毎日もらえる紫晶石（連盟対決報酬 ＋ 晶石ボス） */
 export const dailyIncome = (): number => DAILY_INCOME.reduce((sum, s) => sum + s.perDay, 0)
 
+/** 紫晶石がもらえる日数（週のうち月曜〜土曜） */
+export const INCOME_DAYS_PER_WEEK = 6
+/** その曜日（0=月曜 … 6=日曜）に、毎日ぶんの紫晶石がもらえるか */
+const hasDailyIncome = (weekday: number): boolean => weekday < INCOME_DAYS_PER_WEEK
+
+/** 1週間にもらえる紫晶石（毎日ぶん × 6日 ＋ 月曜日のダメージ報酬） */
+export const weeklyIncome = (damage: number): number =>
+  dailyIncome() * INCOME_DAYS_PER_WEEK + damage
+
 /** イベント1つぶんの計算書。数字はすべて銀塊 */
 export interface EventPlan extends ScheduledEvent {
   /** 銀塊必要量 */
@@ -306,7 +310,11 @@ export interface MonthPlan extends YearMonth {
   readonly exchangeAmount: number
   /** 不足する銀塊。その月のイベントの不足分の合計 */
   readonly silverShortage: number
-  /** 月末の時点で、まだ交換したいのに、上限が残っていて紫晶石が足りなかった */
+  /**
+   * この月の不足が、紫晶石の入手が足りないせいで起きている。
+   * 月の入手で交換できる回数が、この月に交換したい回数（上限まで）に届いていないとき。
+   * 来月ぶんの前倒しができないだけの月や、週の入手が間に合わないだけの月は含めない。
+   */
   readonly amethystLimited: boolean
   /** その月に入手した紫晶石 */
   readonly income: number
@@ -338,8 +346,8 @@ export function planCalendar(
   damage: number,
   buyAll: Readonly<Record<string, boolean>> = {},
   carry: number = DEFAULT_CARRY,
-): MonthPlan[] {
-  const months = [first, nextMonth(first)]
+): [MonthPlan, MonthPlan] {
+  const months = [first, nextMonth(first)] as const
   const perDay = dailyIncome()
 
   let silver = carry
@@ -352,7 +360,7 @@ export function planCalendar(
   let carryIn = silver // 次に精算するイベントの「前からの繰越」
   let gain = 0 // 前の精算のあとに交換した銀塊
 
-  return months.map((ym): MonthPlan => {
+  const planMonth = (ym: YearMonth): MonthPlan => {
     const firstDay = toEpoch({ ...ym, day: 1 })
     const lastDay = firstDay + daysInMonth(ym) - 1
     const monthCarryIn = silver
@@ -361,12 +369,11 @@ export function planCalendar(
     let income = 0
     let incomeDays = 0
     let mondays = 0
-    let amethystLimited = false
     const events: EventPlan[] = []
 
     for (let day = firstDay; day <= lastDay; day++) {
       const weekday = weekdayOf(day)
-      if (weekday !== SUNDAY) {
+      if (hasDailyIncome(weekday)) {
         income += perDay
         amethyst += perDay
         incomeDays++
@@ -384,8 +391,6 @@ export function planCalendar(
       capLeft -= times
       silver += times * EXCHANGE_UNIT
       gain += times * EXCHANGE_UNIT
-      // 月末まで持ち越された状態が残る（その日の交換のあとも、まだ交換したくて上限も残っている）
-      amethystLimited = wanted > times && capLeft > 0
 
       while (pending[0] && toEpoch(pending[0].settle) === day) {
         const e = pending.shift()
@@ -406,21 +411,29 @@ export function planCalendar(
     }
 
     const exchanges = EXCHANGE_LIMIT - capLeft
+    const need = events.reduce((sum, e) => sum + e.use, 0)
+    const silverShortage = events.reduce((sum, e) => sum + e.shortfall, 0)
+    // この月のぶんとして交換したかった回数（上限まで）と、月の入手で交換できる回数
+    const wantedThisMonth = Math.min(EXCHANGE_LIMIT, exchangesNeeded(Math.max(0, need - monthCarryIn)))
+    const affordable = Math.floor(income / EXCHANGE_UNIT)
     return {
       ...ym,
       carryIn: monthCarryIn,
-      need: events.reduce((sum, e) => sum + e.use, 0),
+      need,
       exchanges,
       exchangeAmount: exchanges * EXCHANGE_UNIT,
-      silverShortage: events.reduce((sum, e) => sum + e.shortfall, 0),
-      amethystLimited,
+      silverShortage,
+      amethystLimited: silverShortage > 0 && affordable < wantedThisMonth,
       income,
       incomeDays,
       mondays,
       balance: income - exchanges * EXCHANGE_UNIT,
       events,
     }
-  })
+  }
+  // 1か月目を先に計算する（手持ちの銀塊や、まだ終わっていないイベントを2か月目に引き継ぐため）
+  const current = planMonth(months[0])
+  return [current, planMonth(months[1])]
 }
 
 /**
@@ -436,9 +449,9 @@ export function recommendedCarry(
   buyAll: Readonly<Record<string, boolean>> = {},
 ): number {
   const shortage = (carry: number): number =>
-    planCalendar(month, damage, buyAll, carry)[0]?.silverShortage ?? 0
+    planCalendar(month, damage, buyAll, carry)[0].silverShortage
   let low = 0
-  let high = exchangesNeeded(planCalendar(month, damage, buyAll, 0)[0]?.need ?? 0)
+  let high = exchangesNeeded(planCalendar(month, damage, buyAll, 0)[0].need)
   while (low < high) {
     const mid = Math.floor((low + high) / 2)
     if (shortage(mid * EXCHANGE_UNIT) === 0) high = mid

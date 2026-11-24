@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   DAILY_INCOME,
   DEFAULT_CARRY,
@@ -16,12 +16,12 @@ import {
   exchangeYen,
   nextMonth,
   optionalTotal,
-  parseCarry,
   parseDamage,
   planCalendar,
   recommendedCarry,
   snapCarry,
   todayYmd,
+  weeklyIncome,
 } from '../silver'
 import type { EventPlan, MonthPlan, SilverEvent, YearMonth, Ymd } from '../silver'
 import { pageDef } from '../pages'
@@ -32,7 +32,8 @@ import { load, save } from '../storage'
 const PAGE = pageDef('silver')
 
 const DAMAGE_KEY = 'lastwar-silver:damage'
-const CARRY_KEY = 'lastwar-silver:carry'
+/** 以前は前月繰越分を保存していた。いまは保存しないので、残っていたら消す */
+const LEGACY_CARRY_KEY = 'lastwar-silver:carry'
 /** イベントごとの「お金で上限まで買う」。オフにしたときだけ '0' を保存する */
 const buyAllKey = (eventKey: string): string => `lastwar-silver:buyall:${eventKey}`
 const DAMAGE_HINT_ID = 'silver-damage-hint'
@@ -50,32 +51,70 @@ const loadDamageRaw = (): string => {
   if (stored === null || stored.trim() === '') return fmt(DEFAULT_DAMAGE)
   return fmt(parseDamage(stored).value ?? DEFAULT_DAMAGE)
 }
-/** 保存された前月繰越分。保存されていない・不正な値なら初期値。5,000 の倍数にそろえる */
-const loadCarry = (): number => snapCarry(parseCarry(load(CARRY_KEY) ?? '').value ?? DEFAULT_CARRY)
 const loadBuyAll = (): Record<string, boolean> =>
   Object.fromEntries(OPTIONAL_EVENTS.map((e) => [e.key, load(buyAllKey(e.key)) !== '0']))
 
+const sameDay = (a: Ymd, b: Ymd): boolean =>
+  a.year === b.year && a.month === b.month && a.day === b.day
+
+/**
+ * 今日の日付。ページを開いたままでも日付が進むことがある（ほかのページから戻ってきた、
+ * タブを開きっぱなしにしていた、など）ので、画面に戻ってきたタイミングで確かめ直す。
+ * fixed を渡すと、その日付に固定する（テスト用）。
+ */
+function useToday(fixed: Ymd | undefined): Ymd {
+  const [clock, setClock] = useState<Ymd>(() => todayYmd())
+  useEffect(() => {
+    if (fixed) return
+    const refresh = (): void =>
+      setClock((prev) => {
+        const now = todayYmd()
+        return sameDay(prev, now) ? prev : now
+      })
+    // このページは一度開くと隠されるだけで残る（App.tsx）ので、戻ってきたことはこれらで知る
+    window.addEventListener('focus', refresh)
+    window.addEventListener('hashchange', refresh)
+    document.addEventListener('visibilitychange', refresh)
+    return () => {
+      window.removeEventListener('focus', refresh)
+      window.removeEventListener('hashchange', refresh)
+      document.removeEventListener('visibilitychange', refresh)
+    }
+  }, [fixed])
+  return fixed ?? clock
+}
+
 /**
  * 銀塊必要量チェッカーのページ（SPEC §14）。
- * 開いた日の「今月」と「来月」の2か月を計算する。today はテストで日付を固定するためのもの。
+ * 今日の「今月」と「来月」の2か月を計算する。today はテストで日付を固定するためのもの。
  */
 export default function Silver({ today: fixedToday }: { today?: Ymd }) {
-  // 開いているあいだに日付が変わっても表示を切り替えない（最初に開いた日のままにする）
-  const [today] = useState<Ymd>(() => fixedToday ?? todayYmd())
-  const thisMonth: YearMonth = { year: today.year, month: today.month }
-  // 前月繰越分は「＋」「−」でしか変えないので、数値のまま持つ（不正な値にならない）
-  const [carry, setCarry] = useState<number>(loadCarry)
+  const today = useToday(fixedToday)
+  const { year, month } = today
+  const thisMonth = useMemo<YearMonth>(() => ({ year, month }), [year, month])
+  // 前月繰越分は「＋」「−」でしか変えないので、数値のまま持つ（不正な値にならない）。
+  // 月ごとに変わる値なので保存しない。リロードすると 0 に戻る（SPEC §14.5）
+  const [carry, setCarry] = useState<number>(DEFAULT_CARRY)
   // ダメージ報酬は入力途中（空欄など）も保持したいので文字列で持つ
   const [damageRaw, setDamageRaw] = useState<string>(loadDamageRaw)
   const [buyAll, setBuyAll] = useState<Record<string, boolean>>(loadBuyAll)
 
   const damage = parseDamage(damageRaw).value
 
+  // 開いたまま月が替わったら、前月繰越分は前の月のものなので 0 に戻す
+  const shownMonth = useRef(thisMonth)
+  useEffect(() => {
+    if (shownMonth.current !== thisMonth) {
+      shownMonth.current = thisMonth
+      setCarry(DEFAULT_CARRY)
+    }
+  }, [thisMonth])
+
+  useEffect(() => {
+    save(LEGACY_CARRY_KEY, null)
+  }, [])
   // 保存するのは「初期値から変えた、有効な値」だけ（初期値を保存すると、初期値を変えても古い値が残る）。
   // 入力途中の不正な値では触らず、最後に有効だった値を残す
-  useEffect(() => {
-    save(CARRY_KEY, carry === DEFAULT_CARRY ? null : String(carry))
-  }, [carry])
   useEffect(() => {
     if (damage === null) return
     save(DAMAGE_KEY, damage === DEFAULT_DAMAGE ? null : String(damage))
@@ -84,12 +123,16 @@ export default function Silver({ today: fixedToday }: { today?: Ymd }) {
     for (const e of OPTIONAL_EVENTS) save(buyAllKey(e.key), buyAll[e.key] === false ? '0' : null)
   }, [buyAll])
 
-  const months = damage === null ? null : planCalendar(thisMonth, damage, buyAll, carry)
-  const current = months?.[0]
-  const next = months?.[1]
-  // 来月に不足を出さないために、今月から繰り越したい銀塊の量
-  const recommended =
-    damage === null ? null : recommendedCarry(nextMonth(thisMonth), damage, buyAll)
+  const [current, next] = useMemo(
+    () => (damage === null ? [null, null] : planCalendar(thisMonth, damage, buyAll, carry)),
+    [thisMonth, damage, buyAll, carry],
+  )
+  // 来月に不足を出さないために、今月から繰り越したい銀塊の量。
+  // 前月繰越分には左右されないので、「＋」「−」のたびには計算し直さない
+  const recommended = useMemo(
+    () => (damage === null ? null : recommendedCarry(nextMonth(thisMonth), damage, buyAll)),
+    [thisMonth, damage, buyAll],
+  )
 
   return (
     <div className="cafe">
@@ -138,7 +181,7 @@ export default function Silver({ today: fixedToday }: { today?: Ymd }) {
 
       <Calendar months={[thisMonth, nextMonth(thisMonth)]} today={today} />
 
-      {!current || !next || damage === null || recommended === null ? (
+      {current === null || next === null || damage === null || recommended === null ? (
         <p className="cafe__notice">ダメージ報酬に 0 以上の整数を入れると計算できます。</p>
       ) : (
         <>
@@ -189,7 +232,7 @@ function CarryStepper({ carry, onChange }: { carry: number; onChange: (carry: nu
         </button>
       </div>
       <p className="field__hint" id={CARRY_HINT_ID}>
-        {`今月の1日の時点で持っていた銀塊の数です。＋ − で ${fmt(EXCHANGE_UNIT)} ずつ変えられます。`}
+        {`今月の1日の時点で持っていた銀塊の数です。＋ − で ${fmt(EXCHANGE_UNIT)} ずつ変えられます（保存はされません）。`}
       </p>
     </div>
   )
@@ -295,15 +338,24 @@ function Calendar({ months, today }: { months: readonly YearMonth[]; today: Ymd 
                     {week.band.from > 0 && <td colSpan={week.band.from} />}
                     <td
                       colSpan={week.band.to - week.band.from + 1}
-                      className={'cal__band' + (week.band.continued ? ' cal__band--continued' : '')}
+                      className={
+                        'cal__band' +
+                        (week.band.continued ? ' cal__band--continued' : '') +
+                        // 1日ぶんの帯は幅が狭いので、名前が切れないよう字を小さくする
+                        (week.band.to === week.band.from ? ' cal__band--narrow' : '')
+                      }
                       data-event={week.band.event.key}
                     >
                       {week.band.event.name}
                       {/* 前の月に始まったイベントの続き。この月のイベントには数えない。
-                          1〜2日ぶんの短い帯には入りきらないので、3日以上のときだけ添える */}
-                      {week.band.continued && week.band.to - week.band.from >= 2 && (
-                        <small>（前月から）</small>
-                      )}
+                          1〜2日ぶんの短い帯には入りきらないので、見た目には3日以上のときだけ添え、
+                          それより短いときは読み上げにだけ伝える */}
+                      {week.band.continued &&
+                        (week.band.to - week.band.from >= 2 ? (
+                          <small>（前月から）</small>
+                        ) : (
+                          <span className="visually-hidden">（前月から）</span>
+                        ))}
                     </td>
                     {week.band.to < 6 && <td colSpan={6 - week.band.to} />}
                   </>
@@ -489,7 +541,7 @@ function Flow({ plan, damage }: { plan: MonthPlan; damage: number }) {
         週ごとの流れ
       </h2>
       <p className="cafe__note">
-        {`毎週獲得できる紫晶石（${fmt(dailyIncome() * 6 + damage)}）を、2か月ぶんの必要銀塊量か、月ごとの銀塊の交換上限量（${fmt(MONTHLY_CAP)}）に達するまで、` +
+        {`毎週獲得できる紫晶石（${fmt(weeklyIncome(damage))}）を、2か月ぶんの必要銀塊量か、月ごとの銀塊の交換上限量（${fmt(MONTHLY_CAP)}）に達するまで、` +
           `${fmt(EXCHANGE_UNIT)} 個ずつ銀塊に交換していった場合の流れです。数字はすべて銀塊です。`}
       </p>
       <ol className="weeks">
