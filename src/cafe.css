@@ -160,6 +160,10 @@ html[data-theme='cafe'] body {
 }
 
 /* ---------- 入力欄 ---------- */
+.cafe .field + .field {
+  margin-top: 10px;
+}
+
 .cafe .field__label {
   display: block;
   font-size: 13px;
@@ -180,6 +184,49 @@ html[data-theme='cafe'] body {
   border: 1px solid #cdbb9f;
   border-radius: 4px;
   outline: none;
+}
+
+/* 「−」欄「＋」を横に並べる。欄の上の余白は並べた枠のほうで取る */
+.cafe .field__stepper {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.cafe .field__stepper .field__input {
+  flex: 1;
+  min-width: 0;
+  margin-top: 0;
+  text-align: center;
+}
+
+.cafe .field__step {
+  flex: none;
+  width: 48px;
+  font: inherit;
+  font-size: 22px;
+  line-height: 1;
+  color: var(--caramel);
+  background: #fffaf0;
+  border: 1px solid #cdbb9f;
+  border-radius: 4px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.cafe .field__step:active:not(:disabled) {
+  background: rgba(164, 104, 60, 0.14);
+}
+
+.cafe .field__step:focus-visible {
+  outline: 2px solid var(--caramel);
+  outline-offset: 2px;
+}
+
+.cafe .field__step:disabled {
+  opacity: 0.35;
+  cursor: default;
 }
 
 .cafe .field__input:focus {
@@ -306,6 +353,42 @@ html[data-theme='cafe'] body {
   font-variant-numeric: tabular-nums;
 }
 
+/* 今月の銀塊が足りないときの知らせ。必要量のすぐ下に赤字で出す */
+.cafe .total__alert {
+  margin-top: 4px;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.6;
+  text-align: center;
+  color: #a13a2a;
+}
+
+/* 紫晶石の余りの使い道。番号つきの一覧で、上ほど優先 */
+.cafe .priority-list {
+  margin-top: 8px;
+  padding: 10px 12px;
+  background: rgba(164, 104, 60, 0.07);
+  border-radius: 4px;
+}
+
+.cafe .priority-list__title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--caramel);
+}
+
+.cafe .priority-list ol {
+  margin-top: 4px;
+  padding-left: 1.6em;
+  font-size: 13px;
+  line-height: 1.9;
+}
+
+.cafe .priority-list li::marker {
+  color: var(--caramel);
+  font-variant-numeric: tabular-nums;
+}
+
 /* 項目名と数字を左右に分ける帳面 */
 .cafe .ledger {
   margin-top: 10px;
@@ -330,6 +413,59 @@ html[data-theme='cafe'] body {
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+/* 行の見出しを押すと内訳が開く。見た目は見出しのまま、押せることだけ 🔽 で示す */
+.cafe .ledger__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 40px;
+  margin: -10px 0;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  background: none;
+  border: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.cafe .ledger__toggle:focus-visible {
+  outline: 2px solid var(--caramel);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+.cafe .ledger__caret {
+  font-size: 12px;
+}
+
+/* 開いた内訳。親の行より一段下げ、区切り線は引かない */
+.cafe .ledger > .ledger__detail {
+  display: block;
+  padding: 0 0 6px 12px;
+  border-top: none;
+}
+
+.cafe .ledger > .ledger__detail[hidden] {
+  display: none;
+}
+
+.cafe .ledger--sub {
+  margin-top: 0;
+}
+
+.cafe .ledger--sub > div {
+  padding: 3px 0;
+  border-top: none;
+  font-size: 12px;
+}
+
+.cafe .ledger--sub dd {
+  font-size: 13px;
+  font-weight: 400;
 }
 
 .cafe .ledger__ok dd {
@@ -370,38 +506,67 @@ html[data-theme='cafe'] body {
   letter-spacing: 0.06em;
 }
 
-.cafe .week__reserve {
-  margin-top: 4px;
+/* 1週ぶんの計算書。項目名と数字を左右に分け、上から順に足し引きして最後の行（結果）になる */
+.cafe .week__sheet {
+  margin-top: 6px;
+}
+
+.cafe .week__sheet > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 3px 0;
   font-size: 13px;
 }
 
-.cafe .week__reserve strong {
-  font-size: 19px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
+.cafe .week__sheet dt {
+  color: var(--ink-soft);
+}
+
+/* ＋ − ＝ の記号。繰越の行には記号が無いので、そのぶん項目名を字下げしてそろえる */
+.cafe .week__sign {
+  display: inline-block;
+  width: 1.4em;
   color: var(--caramel);
 }
 
-.cafe .week__reserve--none {
-  color: var(--ink-soft);
+.cafe .week__sheet > div:first-child dt {
+  padding-left: 1.4em;
 }
 
-.cafe .week__flow {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-  margin-top: 8px;
-}
-
-.cafe .week__flow dt {
+.cafe .week__sheet small {
   font-size: 11px;
-  color: var(--ink-soft);
 }
 
-.cafe .week__flow dd {
-  font-size: 14px;
+.cafe .week__sheet dd {
+  font-size: 15px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* 結果の行。上に線を引いて、計算の答えであることを示す */
+.cafe .week__sheet > .week__result {
+  margin-top: 3px;
+  padding-top: 6px;
+  border-top: 1px solid #cdbb9f;
+}
+
+.cafe .week__result dt {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.cafe .week__result dd {
+  font-size: 17px;
+}
+
+/* 不足する週は、結果の行を赤くする */
+.cafe .week__short dt,
+.cafe .week__short dd,
+.cafe .week__short .week__sign {
+  color: #a13a2a;
 }
 
 /* ---------- 内訳 ---------- */

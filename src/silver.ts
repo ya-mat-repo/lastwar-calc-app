@@ -57,8 +57,11 @@ export const SILVER_EVENTS: readonly SilverEvent[] = [
     key: 'bounty',
     name: '賞金稼ぎ',
     item: '賞金稼ぎ用弾丸',
-    price: { amount: 100, yen: 1500 },
-    exchanges: [{ cost: 5000, gain: 80, times: 6, kind: 'must' }],
+    price: { amount: 200, yen: 3000 },
+    exchanges: [
+      { cost: 5000, gain: 80, times: 6, kind: 'must' },
+      { cost: 10000, gain: 100, times: 6, kind: 'optional' },
+    ],
   },
 ]
 
@@ -73,6 +76,9 @@ export const INCOME_DAYS = 6
 export const DEFAULT_DAMAGE = 20_500
 /** ダメージ報酬の上限（桁の打ち間違いを弾くためのもの） */
 export const MAX_DAMAGE = 9_999_999
+/** 前月繰越分の銀塊の初期値と上限 */
+export const DEFAULT_CARRY = 0
+export const MAX_CARRY = 9_999_999
 
 /** 紫晶石 → 銀塊の交換は、銀塊 5,000 個を1単位として行う（紫晶石 1 個 = 銀塊 1 個） */
 export const EXCHANGE_UNIT = 5_000
@@ -83,6 +89,15 @@ export const MONTHLY_CAP = EXCHANGE_UNIT * EXCHANGE_LIMIT
 
 /** その量の銀塊を手に入れるのに必要な交換回数（単位に満たない端数は1回ぶんに切り上げる） */
 export const exchangesNeeded = (silver: number): number => Math.ceil(silver / EXCHANGE_UNIT)
+
+/** 紫晶石の余りを銀塊以外に回すときの、交換の優先順位（先頭ほど優先） */
+export const SURPLUS_PRIORITY: readonly string[] = [
+  '金塊',
+  '高級パス交換券',
+  '特級パス交換券',
+  '戦争準備パック交換券',
+  '週間配達一括交換券',
+]
 
 /** ダメージ報酬を除いた、1週間の紫晶石の入手量 */
 export const weeklyBaseIncome = (): number =>
@@ -114,46 +129,30 @@ export function parseDamage(raw: string): { value: number | null; invalid: boole
   return parseIntInRange(raw, 0, MAX_DAMAGE)
 }
 
-/**
- * 各週の始めに持っておくべき最小の貯え。
- *
- *   S_i = max(0, U_i − W + S_{i+1})   （最後の週の次は最初の週に戻る）
- *
- * を満たす最小の S を返す。毎月の入手が必要量に届かないとき（ΣU > W × 週数）は
- * いくら貯めても足りないので null を返す。
- */
-export function weeklyReserves(uses: readonly number[], weekly: number): number[] | null {
-  const n = uses.length
-  if (uses.reduce((a, b) => a + b, 0) > weekly * n) return null
-  const reserve: number[] = uses.map(() => 0)
-  // 0 から始めて後ろの週から順に更新すると、値は増える一方で最小の解に収束する。
-  // 貯えは多くても1周ぶん先までしか影響しないので、2周あれば止まる（念のため余裕を見る）
-  for (let pass = 0; pass < n + 2; pass++) {
-    let changed = false
-    for (let i = n - 1; i >= 0; i--) {
-      const next = Math.max(0, (uses[i] ?? 0) - weekly + (reserve[(i + 1) % n] ?? 0))
-      if (next !== reserve[i]) {
-        reserve[i] = next
-        changed = true
-      }
-    }
-    if (!changed) break
-  }
-  return reserve
+/** 前月繰越分の銀塊の入力を解釈する。受け付けるのは 0〜MAX_CARRY の整数だけ */
+export function parseCarry(raw: string): { value: number | null; invalid: boolean } {
+  return parseIntInRange(raw, 0, MAX_CARRY)
 }
 
+/** 4週間の流れの1週ぶん。数字はすべて銀塊 */
 export interface WeekPlan {
   /** 1 始まりの週番号 */
   readonly week: number
   readonly event: SilverEvent
-  /** この週のイベントで使う銀塊 */
+  /** 前の週からの繰越。この週の始めに持っている銀塊（1週目は前月繰越分） */
+  readonly carryIn: number
+  /** 銀塊必要量。この週のイベントで使う銀塊 */
   readonly use: number
   /** そのうち任意の交換ぶん（必要量に入れていなければ 0） */
   readonly optionalUse: number
-  /** この週の始めに持っておくべき貯え。入手が足りないときは null */
-  readonly reserve: number | null
-  /** この週に、貯えに回さず自由に使える量。入手が足りないときは null */
-  readonly free: number | null
+  /** 銀塊入手量。この週に紫晶石と交換して手に入れる銀塊（EXCHANGE_UNIT きざみ） */
+  readonly gain: number
+  /** その交換回数（gain ÷ EXCHANGE_UNIT） */
+  readonly gainTimes: number
+  /** 銀塊の不足分。前の週からの繰越と、この週の入手を合わせても足りない量（足りていれば 0） */
+  readonly shortfall: number
+  /** 銀塊繰越量。この週を終えて残り、次の週に持ち越す銀塊（4週目のぶんは翌月の前月繰越分になる） */
+  readonly carryOver: number
 }
 
 export interface SilverPlan {
@@ -161,54 +160,97 @@ export interface SilverPlan {
   readonly weeklyIncome: number
   /** 月（4週間）の入手量 */
   readonly monthlyIncome: number
-  /** 月の必要量 */
+  /** 月の必要量（銀塊） */
   readonly monthlyNeed: number
-  /** 入手量 − 必要量。0 以上なら余り、負なら不足 */
-  readonly balance: number
-  /** 必要量を手に入れるのに必要な、紫晶石 → 銀塊の交換回数 */
+  /** 前月繰越分の銀塊 */
+  readonly carry: number
+  /**
+   * 今月、紫晶石と交換する回数。
+   * 必要量から前月繰越分を引いたぶんを交換するが、月の上限（EXCHANGE_LIMIT）までしか交換できない。
+   */
   readonly exchanges: number
-  /** 交換回数が月の上限（EXCHANGE_LIMIT）を超えている */
-  readonly overCap: boolean
+  /** 交換に使う紫晶石（＝交換で手に入る銀塊）。exchanges × EXCHANGE_UNIT */
+  readonly exchangeAmount: number
+  /**
+   * 今月不足する銀塊。上限いっぱいまで交換しても足りない量
+   * （必要量 − 前月繰越分 − 月の上限。足りていれば 0）。
+   */
+  readonly silverShortage: number
+  /** 入手量 − 交換に使う紫晶石。0 以上なら紫晶石の余り、負なら紫晶石の不足 */
+  readonly balance: number
+  /** 4週間の流れ（SPEC §14.6）。銀塊の入手・不足・繰越を週ごとに追ったもの */
   readonly weeks: readonly WeekPlan[]
 }
 
 /**
- * 月の必要量と、週ごとの貯えを求める。
+ * 今月の交換を週ごとに割りふり、銀塊の入手・不足・繰越を追う。
+ *
+ * - 今月交換する量（target）に達するまで、毎週、手持ちの紫晶石で交換できるだけ交換する。
+ *   交換は EXCHANGE_UNIT きざみで、端数の紫晶石は翌週に回す。
+ * - その週に使える銀塊は「前の週からの繰越 ＋ この週の入手」。使う量に足りなければ不足分になり、
+ *   余れば次の週に繰り越す。足りなかったぶんを翌週に持ち越すことはしない（イベントは週で終わるため）。
+ * - 翌月のための前倒しはしない。今月の必要量ぶん（target）しか交換しない。
+ */
+function simulateWeeks(
+  rows: readonly { event: SilverEvent; use: number; optionalUse: number }[],
+  weeklyIncome: number,
+  carry: number,
+  target: number,
+): WeekPlan[] {
+  let amethyst = 0 // 手持ちの紫晶石（交換の端数が残る）
+  let silver = carry // 手持ちの銀塊
+  let remaining = target // 今月まだ交換していない量
+  return rows.map((r, i): WeekPlan => {
+    amethyst += weeklyIncome
+    const gain = Math.min(remaining, Math.floor(amethyst / EXCHANGE_UNIT) * EXCHANGE_UNIT)
+    amethyst -= gain
+    remaining -= gain
+    const carryIn = silver
+    const available = carryIn + gain
+    silver = Math.max(0, available - r.use)
+    return {
+      week: i + 1,
+      ...r,
+      carryIn,
+      gain,
+      gainTimes: gain / EXCHANGE_UNIT,
+      shortfall: Math.max(0, r.use - available),
+      carryOver: silver,
+    }
+  })
+}
+
+/**
+ * 月の必要量と、今月の交換、4週間の流れを求める。carry は前月繰越分の銀塊（今月の交換を減らす）。
  * buyAll はイベントの key →「お金で買える分を上限まで買う」。
  * true のイベントだけ、任意の交換ぶんを必要量に入れる（指定が無ければ true）。
  */
 export function planSilver(
   damage: number,
   buyAll: Readonly<Record<string, boolean>> = {},
+  carry: number = DEFAULT_CARRY,
 ): SilverPlan {
   const weeklyIncome = weeklyBaseIncome() + damage
   const rows = SILVER_EVENTS.map((event) => {
     const optionalUse = buyAll[event.key] === false ? 0 : optionalTotal(event)
     return { event, optionalUse, use: mustTotal(event) + optionalUse }
   })
-  const uses = rows.map((r) => r.use)
-  const monthlyNeed = uses.reduce((a, b) => a + b, 0)
+  const monthlyNeed = rows.reduce((sum, r) => sum + r.use, 0)
   const monthlyIncome = weeklyIncome * rows.length
-  const reserves = weeklyReserves(uses, weeklyIncome)
 
-  const weeks = rows.map((r, i): WeekPlan => {
-    const reserve = reserves ? (reserves[i] ?? 0) : null
-    const next = reserves ? (reserves[(i + 1) % rows.length] ?? 0) : null
-    return {
-      week: i + 1,
-      ...r,
-      reserve,
-      free: reserve === null || next === null ? null : reserve + weeklyIncome - r.use - next,
-    }
-  })
-  const exchanges = exchangesNeeded(monthlyNeed)
+  // 前月繰越分があれば、そのぶんは交換しなくてよい
+  const toExchange = Math.max(0, monthlyNeed - carry)
+  const exchanges = Math.min(EXCHANGE_LIMIT, exchangesNeeded(toExchange))
+  const exchangeAmount = exchanges * EXCHANGE_UNIT
   return {
     weeklyIncome,
     monthlyIncome,
     monthlyNeed,
-    balance: monthlyIncome - monthlyNeed,
+    carry,
     exchanges,
-    overCap: exchanges > EXCHANGE_LIMIT,
-    weeks,
+    exchangeAmount,
+    silverShortage: Math.max(0, toExchange - MONTHLY_CAP),
+    balance: monthlyIncome - exchangeAmount,
+    weeks: simulateWeeks(rows, weeklyIncome, carry, exchangeAmount),
   }
 }

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  DEFAULT_CARRY,
   DEFAULT_DAMAGE,
   EXCHANGE_LIMIT,
   EXCHANGE_UNIT,
@@ -11,28 +12,16 @@ import {
   exchangesNeeded,
   mustTotal,
   optionalTotal,
+  parseCarry,
   parseDamage,
   planSilver,
   weeklyBaseIncome,
-  weeklyReserves,
 } from './silver'
 
 const event = (key: string) => {
   const e = SILVER_EVENTS.find((x) => x.key === key)
   if (!e) throw new Error(`${key} が無い`)
   return e
-}
-
-/** 総当たりの検算: 貯え S から始めて何か月回しても、週の途中で残りが負にならないか */
-const survives = (uses: readonly number[], weekly: number, start: number): boolean => {
-  let stock = start
-  for (let month = 0; month < 6; month++) {
-    for (const use of uses) {
-      stock += weekly - use
-      if (stock < 0) return false
-    }
-  }
-  return true
 }
 
 describe('データ（SPEC §14.3）', () => {
@@ -45,18 +34,21 @@ describe('データ（SPEC §14.3）', () => {
       ['閃金', 30_000, 150_000],
       ['百発百中', 25_000, 0],
       ['戦争準備', 0, 0],
-      ['賞金稼ぎ', 30_000, 0],
+      ['賞金稼ぎ', 30_000, 60_000],
     ])
   })
 
-  it('必ずの合計 85,000、任意の合計 150,000、月合計 235,000', () => {
+  it('必ずの合計 85,000、任意の合計 210,000、月合計 295,000', () => {
     const must = SILVER_EVENTS.reduce((s, e) => s + mustTotal(e), 0)
     const optional = SILVER_EVENTS.reduce((s, e) => s + optionalTotal(e), 0)
-    expect([must, optional, must + optional]).toEqual([85_000, 150_000, 235_000])
+    expect([must, optional, must + optional]).toEqual([85_000, 210_000, 295_000])
   })
 
-  it('任意の交換があるのは閃金だけ', () => {
-    expect(SILVER_EVENTS.filter((e) => optionalTotal(e) > 0).map((e) => e.name)).toEqual(['閃金'])
+  it('任意の交換があるのは閃金と賞金稼ぎ', () => {
+    expect(SILVER_EVENTS.filter((e) => optionalTotal(e) > 0).map((e) => e.name)).toEqual([
+      '閃金',
+      '賞金稼ぎ',
+    ])
   })
 
   it('ダメージ報酬を除く週の入手量は (6,500 + 2,500) × 6 = 54,000', () => {
@@ -69,7 +61,8 @@ describe('お金に直した額（SPEC §14.4）', () => {
     ['gold', 0, 1200], // 80 閃金
     ['gold', 1, 1500], // 100 閃金（お金と同じレート）
     ['shot', 0, 1250], // 10 弾丸
-    ['bounty', 0, 1200], // 80 賞金稼ぎ用弾丸
+    ['bounty', 0, 1200], // 80 賞金稼ぎ用弾丸（200 個で 3,000 円）
+    ['bounty', 1, 1500], // 100 賞金稼ぎ用弾丸（お金と同じレート）
   ])('%s の交換 %i は %i 円ぶん', (key, index, yen) => {
     const e = event(key)
     const x = e.exchanges[index]
@@ -120,19 +113,31 @@ describe('紫晶石 → 銀塊の交換の上限（SPEC §14.2）', () => {
     expect(exchangesNeeded(silver)).toBe(times)
   })
 
-  it('すべて交換しても 47回で、上限の50回に収まる', () => {
-    const p = planSilver(DEFAULT_DAMAGE)
-    expect([p.exchanges, p.overCap]).toEqual([47, false])
-  })
+  // 任意の交換を両方入れると 295,000（59回ぶん）で、月の上限 250,000（50回）を超える。
+  // 交換回数は上限の 50 で止め、足りない銀塊を silverShortage に出す
+  it.each<[boolean, boolean, number, number, number, number]>([
+    [true, true, 295_000, 50, 45_000, 48_000],
+    [true, false, 235_000, 47, 0, 63_000],
+    [false, true, 145_000, 29, 0, 153_000],
+    [false, false, 85_000, 17, 0, 213_000],
+  ])(
+    '閃金 %o・賞金稼ぎ %o → 必要量 %i、交換 %i 回、銀塊の不足 %i、紫晶石の余り %i',
+    (gold, bounty, need, times, shortage, balance) => {
+      const p = planSilver(DEFAULT_DAMAGE, { gold, bounty })
+      expect([p.monthlyNeed, p.exchanges, p.silverShortage, p.balance]).toEqual([
+        need,
+        times,
+        shortage,
+        balance,
+      ])
+      expect(p.exchangeAmount).toBe(times * EXCHANGE_UNIT)
+      expect(p.exchanges).toBeLessThanOrEqual(EXCHANGE_LIMIT)
+    },
+  )
 
-  it('任意の交換を入れなければ 17回', () => {
-    const p = planSilver(DEFAULT_DAMAGE, { gold: false })
-    expect([p.exchanges, p.overCap]).toEqual([17, false])
-  })
-
-  it('いまのデータでは、どの条件でも上限を超えない', () => {
-    const max = SILVER_EVENTS.reduce((s, e) => s + mustTotal(e) + optionalTotal(e), 0)
-    expect(max).toBeLessThanOrEqual(MONTHLY_CAP)
+  it('必ずの交換だけなら、上限に収まる', () => {
+    const must = SILVER_EVENTS.reduce((s, e) => s + mustTotal(e), 0)
+    expect(must).toBeLessThanOrEqual(MONTHLY_CAP)
   })
 
   it('どの交換も、1単位（5,000）の倍数の銀塊を使う', () => {
@@ -161,95 +166,288 @@ describe('parseDamage', () => {
   })
 })
 
-describe('weeklyReserves', () => {
-  it('SPEC §14.6 の例', () => {
-    expect(weeklyReserves([180_000, 25_000, 0, 30_000], 74_500)).toEqual([105_500, 0, 0, 61_000])
-  })
+/** 4週間の流れを [必要量, 入手量, 交換回数, 不足分, 繰越量（出）] の配列にする */
+const flow = (p: ReturnType<typeof planSilver>): number[][] =>
+  p.weeks.map((w) => [w.use, w.gain, w.gainTimes, w.shortfall, w.carryOver])
 
-  it('どの週も入手でまかなえるなら、貯えは要らない', () => {
-    expect(weeklyReserves([30_000, 25_000, 0, 30_000], 74_500)).toEqual([0, 0, 0, 0])
-  })
-
-  it('入手がちょうど必要量と同じでも解がある', () => {
-    expect(weeklyReserves([40, 0, 0, 0], 10)).toEqual([30, 0, 10, 20])
-  })
-
-  it('毎月の入手が必要量に届かなければ null', () => {
-    expect(weeklyReserves([41, 0, 0, 0], 10)).toBeNull()
-  })
-
-  it('返した貯えで回り続けられ、それより1少ないと途中で足りなくなる（最小である）', () => {
-    const cases: [number[], number][] = [
-      [[180_000, 25_000, 0, 30_000], 74_500],
-      [[180_000, 25_000, 0, 30_000], 58_750], // 入手 = 必要量
-      [[0, 0, 0, 200], 60],
-      [[100, 100, 0, 0], 55],
-      [[10, 300, 10, 10], 90],
-    ]
-    for (const [uses, weekly] of cases) {
-      const reserve = weeklyReserves(uses, weekly)
-      if (!reserve) throw new Error('解があるはず')
-      // 週 i から始めたときの並びで確かめる
-      uses.forEach((_, i) => {
-        const rotated = [...uses.slice(i), ...uses.slice(0, i)]
-        const start = reserve[i] ?? 0
-        expect(survives(rotated, weekly, start)).toBe(true)
-        if (start > 0) expect(survives(rotated, weekly, start - 1)).toBe(false)
-      })
-    }
-  })
-})
-
-describe('planSilver', () => {
-  it('初期値・すべて交換（SPEC §14.6 の表）', () => {
+describe('planSilver: 月の集計', () => {
+  it('初期値・すべて交換', () => {
     const p = planSilver(DEFAULT_DAMAGE)
     expect(p.weeklyIncome).toBe(74_500)
     expect(p.monthlyIncome).toBe(298_000)
-    expect(p.monthlyNeed).toBe(235_000)
-    expect(p.balance).toBe(63_000)
-    expect(p.weeks.map((w) => [w.week, w.event.name, w.reserve, w.use, w.free])).toEqual([
-      [1, '閃金', 105_500, 180_000, 0],
-      [2, '百発百中', 0, 25_000, 49_500],
-      [3, '戦争準備', 0, 0, 13_500],
-      [4, '賞金稼ぎ', 61_000, 30_000, 0],
+    expect(p.monthlyNeed).toBe(295_000)
+    expect(p.carry).toBe(DEFAULT_CARRY)
+    // 交換できるのは 250,000 までなので、紫晶石は 298,000 − 250,000 = 48,000 余る
+    expect(p.balance).toBe(48_000)
+  })
+
+  it('どちらもお金で上限まで買わないなら、任意の 210,000 を必要量に入れない', () => {
+    const p = planSilver(DEFAULT_DAMAGE, { gold: false, bounty: false })
+    expect(p.monthlyNeed).toBe(85_000)
+    expect(p.balance).toBe(213_000)
+    expect(p.weeks.map((w) => [w.use, w.optionalUse])).toEqual([
+      [30_000, 0],
+      [25_000, 0],
+      [0, 0],
+      [30_000, 0],
     ])
   })
 
-  it('自由に使える量の合計は、月の余りに一致する', () => {
-    for (const damage of [4_750, 10_000, 20_500, 100_000]) {
+  it('指定が無いイベントは「上限まで買う」として扱う', () => {
+    expect(planSilver(DEFAULT_DAMAGE, {}).monthlyNeed).toBe(295_000)
+    const p = planSilver(DEFAULT_DAMAGE, { gold: true })
+    expect([p.weeks[0]?.optionalUse, p.weeks[3]?.optionalUse]).toEqual([150_000, 60_000])
+  })
+
+  it('紫晶石の不足: 交換に使う量（上限まで）に入手が届かないと balance が負になる', () => {
+    const p = planSilver(0) // 入手 216,000。交換は上限の 250,000
+    expect([p.exchanges, p.exchangeAmount, p.balance]).toEqual([50, 250_000, -34_000])
+    expect(p.silverShortage).toBe(45_000)
+  })
+})
+
+describe('planSilver: 4週間の流れ（SPEC §14.6。数字はすべて銀塊）', () => {
+  it('初期値・すべて交換（SPEC §14.6 の表）', () => {
+    const p = planSilver(DEFAULT_DAMAGE)
+    expect(p.weeks.map((w) => w.event.name)).toEqual(['閃金', '百発百中', '戦争準備', '賞金稼ぎ'])
+    expect(flow(p)).toEqual([
+      // 必要量, 入手量, 交換回数, 不足分, 繰越量
+      [180_000, 70_000, 14, 110_000, 0],
+      [25_000, 75_000, 15, 0, 50_000],
+      [0, 75_000, 15, 0, 125_000],
+      [90_000, 30_000, 6, 0, 65_000], // 月の上限（50回）に達するので 6回まで
+    ])
+  })
+
+  it('入手量の合計は今月交換する量と同じで、交換回数の合計も一致する', () => {
+    for (const [gold, bounty, carry] of [
+      [true, true, 0],
+      [true, false, 0],
+      [false, true, 0],
+      [false, false, 0],
+      [true, true, 65_000],
+      [true, true, 110_000],
+      [true, false, 110_000],
+      [true, true, 295_000],
+      [false, false, 3_000],
+    ] as const) {
+      const p = planSilver(DEFAULT_DAMAGE, { gold, bounty }, carry)
+      expect(p.weeks.reduce((s, w) => s + w.gain, 0)).toBe(p.exchangeAmount)
+      expect(p.weeks.reduce((s, w) => s + w.gainTimes, 0)).toBe(p.exchanges)
+    }
+  })
+
+  it('入手量は 5,000 きざみで、端数の紫晶石は翌週に回る', () => {
+    const p = planSilver(DEFAULT_DAMAGE)
+    for (const w of p.weeks) expect(w.gain % EXCHANGE_UNIT).toBe(0)
+    // 1週目は 74,500 → 70,000（端数 4,500）。2週目は 4,500 + 74,500 = 79,000 → 75,000
+    expect(p.weeks.map((w) => w.gain).slice(0, 2)).toEqual([70_000, 75_000])
+  })
+
+  it('銀塊の出入りが合う: 繰越 ＋ 入手 ＝ 使えたぶん ＋ 次への繰越', () => {
+    for (const carry of [0, 3_000, 65_000, 110_000, 295_000]) {
       for (const gold of [true, false]) {
-        const p = planSilver(damage, { gold })
-        expect(p.weeks.reduce((s, w) => s + (w.free ?? 0), 0)).toBe(p.balance)
-        expect(p.weeks.every((w) => (w.free ?? 0) >= 0 && (w.reserve ?? 0) >= 0)).toBe(true)
+        for (const bounty of [true, false]) {
+          const p = planSilver(DEFAULT_DAMAGE, { gold, bounty }, carry)
+          let silver = carry
+          for (const w of p.weeks) {
+            const used = w.use - w.shortfall // 実際に使えたぶん
+            expect(silver + w.gain).toBe(used + w.carryOver)
+            // 不足と繰越が同時に出ることはない
+            expect(w.shortfall === 0 || w.carryOver === 0).toBe(true)
+            silver = w.carryOver
+          }
+        }
       }
     }
   })
 
-  it('閃金をお金で上限まで買わないなら、任意の 150,000 を必要量に入れない', () => {
+  it('月全体の不足: 週の不足分の合計 − 月末の繰越 ＝ 上限で足りない量（紫晶石が足りているとき）', () => {
+    const p = planSilver(DEFAULT_DAMAGE)
+    const shortfall = p.weeks.reduce((s, w) => s + w.shortfall, 0)
+    expect(shortfall).toBe(110_000)
+    expect(shortfall - (p.weeks[3]?.carryOver ?? 0)).toBe(p.silverShortage) // 110,000 − 65,000 = 45,000
+  })
+
+  it('閃金だけ任意を入れる（賞金稼ぎはお金で上限まで買わない）', () => {
+    const p = planSilver(DEFAULT_DAMAGE, { bounty: false })
+    expect([p.monthlyNeed, p.exchanges, p.balance]).toEqual([235_000, 47, 63_000])
+    expect(flow(p)).toEqual([
+      [180_000, 70_000, 14, 110_000, 0],
+      [25_000, 75_000, 15, 0, 50_000],
+      [0, 75_000, 15, 0, 125_000],
+      [30_000, 15_000, 3, 0, 110_000],
+    ])
+  })
+
+  it('賞金稼ぎだけ任意を入れる（閃金はお金で上限まで買わない）', () => {
     const p = planSilver(DEFAULT_DAMAGE, { gold: false })
-    expect(p.monthlyNeed).toBe(85_000)
-    expect(p.balance).toBe(213_000)
-    expect(p.weeks[0]?.use).toBe(30_000)
-    expect(p.weeks[0]?.optionalUse).toBe(0)
-    // どの週も入手でまかなえるので、貯えは要らない
-    expect(p.weeks.map((w) => w.reserve)).toEqual([0, 0, 0, 0])
+    expect([p.monthlyNeed, p.exchanges, p.balance]).toEqual([145_000, 29, 153_000])
+    // 今月ぶん（145,000）に達したら、それ以上は交換しない
+    expect(flow(p)).toEqual([
+      [30_000, 70_000, 14, 0, 40_000],
+      [25_000, 75_000, 15, 0, 90_000],
+      [0, 0, 0, 0, 90_000],
+      [90_000, 0, 0, 0, 0],
+    ])
   })
 
-  it('指定が無いイベントは「上限まで買う」として扱う', () => {
-    expect(planSilver(DEFAULT_DAMAGE, {}).monthlyNeed).toBe(235_000)
-    expect(planSilver(DEFAULT_DAMAGE, { gold: true }).weeks[0]?.optionalUse).toBe(150_000)
+  it('任意を入れないなら、不足は出ない', () => {
+    const p = planSilver(DEFAULT_DAMAGE, { gold: false, bounty: false })
+    expect(flow(p)).toEqual([
+      [30_000, 70_000, 14, 0, 40_000],
+      [25_000, 15_000, 3, 0, 30_000],
+      [0, 0, 0, 0, 30_000],
+      [30_000, 0, 0, 0, 0],
+    ])
   })
 
-  it('ダメージ報酬が週 4,750 なら入手と必要量がちょうど同じ', () => {
-    const p = planSilver(4_750)
-    expect(p.balance).toBe(0)
-    expect(p.weeks.every((w) => w.reserve !== null)).toBe(true)
+  it('紫晶石が足りないと、今月交換するぶんに届かない', () => {
+    const p = planSilver(0) // 入手は週 54,000
+    expect(flow(p)).toEqual([
+      [180_000, 50_000, 10, 130_000, 0],
+      [25_000, 55_000, 11, 0, 30_000],
+      [0, 55_000, 11, 0, 85_000],
+      [90_000, 55_000, 11, 0, 50_000],
+    ])
+    expect(p.weeks.reduce((s, w) => s + w.gain, 0)).toBe(215_000) // 交換したい 250,000 に届かない
+  })
+})
+
+describe('planSilver: 前の週からの繰越（carryIn）', () => {
+  it('1週目は前月繰越分、2週目からは前の週の繰越量', () => {
+    for (const carry of [0, 65_000, 110_000, 295_000]) {
+      const p = planSilver(DEFAULT_DAMAGE, {}, carry)
+      expect(p.weeks[0]?.carryIn).toBe(carry)
+      for (let i = 1; i < p.weeks.length; i++) {
+        expect(p.weeks[i]?.carryIn).toBe(p.weeks[i - 1]?.carryOver)
+      }
+    }
   })
 
-  it('それより少ないと不足し、週ごとの貯えは求めない', () => {
-    const p = planSilver(4_749)
-    expect(p.balance).toBe(-4)
-    expect(p.weeks.map((w) => [w.reserve, w.free])).toEqual(Array(4).fill([null, null]))
-    expect(p.weeks.map((w) => w.use)).toEqual([180_000, 25_000, 0, 30_000])
+  it('どの週も 繰越（入）＋ 入手 − 必要 ＝ 繰越（出）− 不足分 になる', () => {
+    for (const carry of [0, 3_000, 65_000, 110_000]) {
+      for (const gold of [true, false]) {
+        for (const bounty of [true, false]) {
+          for (const w of planSilver(DEFAULT_DAMAGE, { gold, bounty }, carry).weeks) {
+            expect(w.carryIn + w.gain - w.use).toBe(w.carryOver - w.shortfall)
+          }
+        }
+      }
+    }
+  })
+
+  it('初期状態の繰越（入）', () => {
+    expect(planSilver(DEFAULT_DAMAGE).weeks.map((w) => w.carryIn)).toEqual([0, 0, 50_000, 125_000])
+  })
+})
+
+describe('planSilver: 4週間の流れと前月繰越分', () => {
+  it('前月繰越分は1週目から使える', () => {
+    // 前月の4週目の繰越量（65,000）を入れた翌月
+    const p = planSilver(DEFAULT_DAMAGE, {}, 65_000)
+    expect([p.exchanges, p.silverShortage]).toEqual([46, 0])
+    expect(flow(p)).toEqual([
+      [180_000, 70_000, 14, 45_000, 0], // 65,000 + 70,000 = 135,000 で、まだ 45,000 足りない
+      [25_000, 75_000, 15, 0, 50_000],
+      [0, 75_000, 15, 0, 125_000],
+      [90_000, 10_000, 2, 0, 45_000],
+    ])
+  })
+
+  it('繰越が 110,000 あれば、閃金の週も足りる', () => {
+    const p = planSilver(DEFAULT_DAMAGE, {}, 110_000)
+    expect(flow(p)).toEqual([
+      [180_000, 70_000, 14, 0, 0], // 110,000 + 70,000 = 180,000 ちょうど
+      [25_000, 75_000, 15, 0, 50_000],
+      [0, 40_000, 8, 0, 90_000],
+      [90_000, 0, 0, 0, 0],
+    ])
+    expect(p.weeks.every((w) => w.shortfall === 0)).toBe(true)
+  })
+
+  it('繰越だけで足りるなら交換せず、使ったぶんだけ繰越が減っていく', () => {
+    const p = planSilver(DEFAULT_DAMAGE, {}, 295_000)
+    expect(flow(p)).toEqual([
+      [180_000, 0, 0, 0, 115_000],
+      [25_000, 0, 0, 0, 90_000],
+      [0, 0, 0, 0, 90_000],
+      [90_000, 0, 0, 0, 0],
+    ])
+  })
+
+  it('5,000 の倍数でない繰越は、使い切れずに残る', () => {
+    // 必要 85,000 − 繰越 3,000 = 82,000 → 17回（85,000）交換するので、3,000 が残る
+    const p = planSilver(DEFAULT_DAMAGE, { gold: false, bounty: false }, 3_000)
+    expect(p.weeks[3]?.carryOver).toBe(3_000)
+  })
+
+  // 翌月のための前倒しはしない（SPEC §14.6）。今月の必要量ぶんしか交換しないので、
+  // 月末の繰越が翌月の閃金に足りるかは、4週目の繰越量を見て利用者が判断する
+  it('月末の繰越量を翌月の前月繰越分に入れると、続きの月を計算できる', () => {
+    const first = planSilver(DEFAULT_DAMAGE, { bounty: false })
+    const carry = first.weeks[3]?.carryOver ?? 0
+    expect(carry).toBe(110_000)
+    const second = planSilver(DEFAULT_DAMAGE, { bounty: false }, carry)
+    expect(flow(second)).toEqual([
+      [180_000, 70_000, 14, 0, 0],
+      [25_000, 55_000, 11, 0, 30_000],
+      [0, 0, 0, 0, 30_000],
+      [30_000, 0, 0, 0, 0],
+    ])
+  })
+})
+
+describe('前月繰越分（SPEC §14.6）', () => {
+  it.each<[number, number, number, number, number]>([
+    // 繰越, 交換回数, 交換に使う紫晶石, 銀塊の不足, 紫晶石の余り
+    [0, 50, 250_000, 45_000, 48_000],
+    [10_000, 50, 250_000, 35_000, 48_000],
+    [44_999, 50, 250_000, 1, 48_000],
+    [45_000, 50, 250_000, 0, 48_000], // ちょうど上限いっぱいで足りる
+    [45_001, 50, 250_000, 0, 48_000], // 249,999 は 50回に切り上げ
+    [50_000, 49, 245_000, 0, 53_000],
+    [100_000, 39, 195_000, 0, 103_000],
+    [295_000, 0, 0, 0, 298_000], // 繰越だけで足りる
+    [400_000, 0, 0, 0, 298_000], // 必要量より多くても負にならない
+  ])('繰越 %i → 交換 %i 回（%i）、銀塊の不足 %i、紫晶石の余り %i', (carry, times, amount, shortage, balance) => {
+    const p = planSilver(DEFAULT_DAMAGE, {}, carry)
+    expect([p.carry, p.exchanges, p.exchangeAmount, p.silverShortage, p.balance]).toEqual([
+      carry,
+      times,
+      amount,
+      shortage,
+      balance,
+    ])
+  })
+
+  it('必要量そのものは繰越で変わらない', () => {
+    expect(planSilver(DEFAULT_DAMAGE, {}, 100_000).monthlyNeed).toBe(295_000)
+  })
+
+  it('不足のメッセージの条件は「必要量 − 繰越 > 250,000」', () => {
+    for (const carry of [0, 44_999, 45_000, 45_001]) {
+      const p = planSilver(DEFAULT_DAMAGE, {}, carry)
+      expect(p.silverShortage > 0).toBe(p.monthlyNeed - carry > MONTHLY_CAP)
+      expect(p.silverShortage).toBe(Math.max(0, p.monthlyNeed - carry - MONTHLY_CAP))
+    }
+  })
+
+  it('指定しなければ繰越は 0', () => {
+    expect(planSilver(DEFAULT_DAMAGE).carry).toBe(0)
+  })
+})
+
+describe('parseCarry', () => {
+  it.each<[string, number | null, boolean]>([
+    ['0', 0, false],
+    ['45,000', 45000, false],
+    ['４５０００', 45000, false],
+    ['', null, true],
+    ['-1', null, true],
+    ['1.5', null, true],
+    ['10000000', null, true],
+  ])('%o → value=%o invalid=%o', (input, value, invalid) => {
+    expect(parseCarry(input)).toEqual({ value, invalid })
   })
 })

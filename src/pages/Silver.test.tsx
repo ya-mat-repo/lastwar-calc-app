@@ -13,14 +13,31 @@ beforeEach(() => localStorage.clear())
 
 const DAMAGE_KEY = 'lastwar-silver:damage'
 const BUYALL_KEY = 'lastwar-silver:buyall:gold'
+const BUYALL_BOUNTY_KEY = 'lastwar-silver:buyall:bounty'
 
 const damageInput = (): HTMLInputElement =>
   screen.getByLabelText(/ダメージ報酬でもらえる紫晶石/) as HTMLInputElement
 const goldSwitch = (): HTMLInputElement =>
   screen.getByRole('switch', { name: /閃金をお金で買える上限まで買う/ }) as HTMLInputElement
+const bountySwitch = (): HTMLInputElement =>
+  screen.getByRole('switch', { name: /賞金稼ぎ用弾丸をお金で買える上限まで買う/ }) as HTMLInputElement
+const carryInput = (): HTMLInputElement =>
+  screen.getByLabelText('前月繰越分の銀塊量') as HTMLInputElement
 const typeDamage = (value: string): void => {
   fireEvent.change(damageInput(), { target: { value } })
 }
+const typeCarry = (value: string): void => {
+  fireEvent.change(carryInput(), { target: { value } })
+}
+const CARRY_KEY = 'lastwar-silver:carry'
+
+/** 必要量の下に出る「今月は ◯ 銀塊が不足します」（出ていなければ null） */
+const alertText = (): string | null =>
+  card('毎月の必要量').querySelector('.total__alert')?.textContent ?? null
+
+/** 入手量の内訳を開閉するボタン */
+const incomeToggle = (): HTMLElement =>
+  screen.getByRole('button', { name: /毎月の入手量（紫晶石）/ })
 
 /** 見出しからそのカードを引く */
 const card = (name: string): HTMLElement =>
@@ -28,51 +45,131 @@ const card = (name: string): HTMLElement =>
 
 /** 帳面（項目名 → 数字）の1行の数字 */
 const ledger = (within_: HTMLElement, term: string): string =>
-  within(within_).getByText(term).parentElement?.querySelector('dd')?.textContent ?? ''
+  within(within_).getByText(term).closest('div')?.querySelector('dd')?.textContent ?? ''
 
-/** 4週間の流れを [週, イベント, 貯えの文, 入手, 使う, 自由に使える] の配列にする */
+/**
+ * 4週間の流れを [イベント, 繰越（入）, 入手量, 必要量, 結果の見出し, 結果の値] の配列にする。
+ * 結果は、足りれば「次週への繰越」（4週目は「翌月への繰越」）、足りなければ「銀塊の不足分」。
+ */
 const weeks = (): string[][] =>
-  [...card('4週間の流れ').querySelectorAll('.week')].map((li) => [
-    li.querySelector('.week__no')?.textContent ?? '',
-    li.querySelector('.week__name')?.textContent ?? '',
-    li.querySelector('.week__reserve')?.textContent ?? '',
-    ...[...li.querySelectorAll('dd')].map((dd) => dd.textContent ?? ''),
-  ])
+  [...card('4週間の流れ').querySelectorAll('.week')].map((li) => {
+    const dd = [...li.querySelectorAll('dd')].map((el) => el.textContent ?? '')
+    const result = li.querySelector('.week__result dt')?.textContent?.replace('＝', '').trim() ?? ''
+    return [li.querySelector('.week__name')?.textContent ?? '', dd[0], dd[1], dd[2], result, dd[3]].map(
+      (v) => v ?? '',
+    )
+  })
 
 describe('Silver: 初期表示（SPEC §14.6 の例）', () => {
-  it('ダメージ報酬 20,500・スイッチはオンで始まる', () => {
+  it('ダメージ報酬 20,500・スイッチはどちらもオンで始まる', () => {
     render(<Silver />)
     expect(damageInput().value).toBe('20,500')
     expect(goldSwitch().checked).toBe(true)
+    expect(bountySwitch().checked).toBe(true)
   })
 
-  it('毎月の必要量 235,000、入手量 298,000、余り 63,000', () => {
+  it('毎月の必要量 295,000、繰越 0、入手量 298,000', () => {
     render(<Silver />)
     const result = card('毎月の必要量')
-    expect(result.querySelector('.total__value')?.textContent).toBe('235,000')
+    expect(result.querySelector('.total__value')?.textContent).toBe('295,000')
+    expect(ledger(result, '前月繰越分の銀塊量')).toBe('0')
     expect(ledger(result, '毎月の入手量（紫晶石）')).toBe('298,000')
-    expect(ledger(result, '余り')).toBe('63,000')
   })
 
-  it('紫晶石との交換回数と、月の上限が出る', () => {
+  // 任意の交換を両方入れると 295,000 で、月に交換できる 250,000 を超える
+  it('初期状態では 45,000 不足するので、必要量の下に赤字で出す', () => {
     render(<Silver />)
+    expect(alertText()).toBe('今月は 45,000 銀塊が不足します。どこかで調整して下さい。')
+    // 必要量のすぐ下（帳面より前）に出る
+    const result = card('毎月の必要量')
+    const order = [...result.children].map((el) => el.className)
+    expect(order.indexOf('total__alert')).toBe(order.indexOf('total') + 1)
+  })
+
+  it('交換回数は上限の 50 で止まり、紫晶石の余りは交換に使わないぶん', () => {
+    render(<Silver />)
+    const result = card('毎月の必要量')
+    expect(ledger(result, '紫晶石との交換回数（月の上限 50回）')).toBe('50 / 50回')
+    expect(ledger(result, '紫晶石の余り')).toBe('48,000') // 298,000 − 250,000
+    expect(within(result).getByText(/月に 50回、250,000 まで/)).toBeTruthy()
+  })
+
+  it('以前の注意「交換できるのは月に〜」は出さない', () => {
+    render(<Silver />)
+    expect(document.body.textContent).not.toContain('交換できるのは月に')
+    expect(document.body.textContent).not.toContain('この流れどおりには交換できません')
+  })
+
+  it('どちらかのスイッチをオフにすれば足りて、不足の知らせは消える', () => {
+    render(<Silver />)
+    fireEvent.click(bountySwitch())
     const result = card('毎月の必要量')
     expect(ledger(result, '紫晶石との交換回数（月の上限 50回）')).toBe('47 / 50回')
-    expect(within(result).getByText(/月に 50回、\s*250,000 まで/)).toBeTruthy()
-    // 上限に収まっているので、警告は出ない
-    expect(result.querySelector('.cafe__note--warn')).toBeNull()
+    expect(alertText()).toBeNull()
 
+    fireEvent.click(bountySwitch())
     fireEvent.click(goldSwitch())
-    expect(ledger(result, '紫晶石との交換回数（月の上限 50回）')).toBe('17 / 50回')
+    expect(ledger(result, '紫晶石との交換回数（月の上限 50回）')).toBe('29 / 50回')
+    expect(alertText()).toBeNull()
   })
 
-  it('4週間の流れ', () => {
+  it('4週間の流れが、週ごとの計算書で出る（繰越 ＋ 入手 − 必要 ＝ 結果）', () => {
     render(<Silver />)
     expect(weeks()).toEqual([
-      ['1週目', '閃金', '始まるまでに 105,500 を貯めておく', '74,500', '180,000', '0'],
-      ['2週目', '百発百中', '貯えは要りません', '74,500', '25,000', '49,500'],
-      ['3週目', '戦争準備', '貯えは要りません', '74,500', '0', '13,500'],
-      ['4週目', '賞金稼ぎ', '始まるまでに 61,000 を貯めておく', '74,500', '30,000', '0'],
+      ['閃金', '0', '70,000', '180,000', '銀塊の不足分', '110,000'],
+      ['百発百中', '0', '75,000', '25,000', '次週への繰越', '50,000'],
+      ['戦争準備', '50,000', '75,000', '0', '次週への繰越', '125,000'],
+      ['賞金稼ぎ', '125,000', '30,000', '90,000', '翌月への繰越', '65,000'],
+    ])
+  })
+
+  it('各週は 繰越・＋入手・−必要・＝結果 の4行で、入手量には交換回数を添える', () => {
+    render(<Silver />)
+    const rows = [...card('4週間の流れ').querySelectorAll('.week')]
+    const labels = (li: Element): string[] =>
+      [...li.querySelectorAll('dt')].map((dt) => dt.textContent ?? '')
+    expect(rows.map(labels)).toEqual([
+      ['前月からの繰越', '＋銀塊入手量（14回交換）', '−銀塊必要量', '＝銀塊の不足分'],
+      ['前週からの繰越', '＋銀塊入手量（15回交換）', '−銀塊必要量', '＝次週への繰越'],
+      ['前週からの繰越', '＋銀塊入手量（15回交換）', '−銀塊必要量', '＝次週への繰越'],
+      ['前週からの繰越', '＋銀塊入手量（6回交換）', '−銀塊必要量', '＝翌月への繰越'], // 月の上限に達する
+    ])
+    // 記号は見た目のためのもの。読み上げでは項目名だけを読ませる
+    for (const sign of card('4週間の流れ').querySelectorAll('.week__sign')) {
+      expect(sign.getAttribute('aria-hidden')).toBe('true')
+    }
+  })
+
+  it('前の週の結果（繰越）が、次の週の最初の行になる', () => {
+    render(<Silver />)
+    const w = weeks()
+    for (let i = 1; i < w.length; i++) {
+      const prev = w[i - 1] as string[]
+      // 不足した週は何も残らないので、次の週は 0 から始まる
+      expect((w[i] as string[])[1]).toBe(prev[4] === '銀塊の不足分' ? '0' : prev[5])
+    }
+  })
+
+  it('カードの説明に、毎週の紫晶石と交換の上限量が出る', () => {
+    render(<Silver />)
+    const c = card('4週間の流れ')
+    expect(c.querySelector('.cafe__note')?.textContent).toBe(
+      '毎週獲得できる紫晶石（74,500）を、今月の必要銀塊量か銀塊の交換上限量（250,000）に達するまで、' +
+        '5,000 個ずつ銀塊に交換していった場合の流れです。数字はすべて銀塊です。',
+    )
+    expect(
+      within(c).getByText('4週目の「翌月への繰越」が、翌月の「前月繰越分の銀塊量」になります。'),
+    ).toBeTruthy()
+  })
+
+  it('不足する週だけ、結果の行を赤くする', () => {
+    render(<Silver />)
+    const rows = [...card('4週間の流れ').querySelectorAll('.week')]
+    expect(rows.map((li) => li.querySelector('.week__short') !== null)).toEqual([
+      true,
+      false,
+      false,
+      false,
     ])
   })
 
@@ -89,41 +186,313 @@ describe('Silver: 初期表示（SPEC §14.6 の例）', () => {
       ['任意・入れる', '銀塊 10,000 → 100 閃金 × 15回', '150,000', '100閃金はお金なら 1,500 円（銀塊と同じレート）'],
       ['必ず', '銀塊 5,000 → 10 弾丸 × 5回', '25,000', '10弾丸はお金なら 1,250 円（銀塊のほうがお得）'],
       ['必ず', '銀塊 5,000 → 80 賞金稼ぎ用弾丸 × 6回', '30,000', '80賞金稼ぎ用弾丸はお金なら 1,200 円（銀塊のほうがお得）'],
+      ['任意・入れる', '銀塊 10,000 → 100 賞金稼ぎ用弾丸 × 6回', '60,000', '100賞金稼ぎ用弾丸はお金なら 1,500 円（銀塊と同じレート）'],
     ])
     expect(within(card('内訳')).getByText('銀塊での交換はありません')).toBeTruthy() // 戦争準備
   })
 
-  it('内訳に、紫晶石の入手量が出る', () => {
+  it('内訳のカードには、銀塊で交換するものだけが出る（入手量の内訳は結果のカードに移した）', () => {
     render(<Silver />)
-    const c = card('内訳')
-    expect(ledger(c, '連盟対決報酬')).toBe('6,500 / 日')
-    expect(ledger(c, '晶石ボス')).toBe('2,500 / 日')
-    expect(ledger(c, 'ダメージ報酬')).toBe('20,500 / 週')
-    expect(ledger(c, '1週間の合計')).toBe('74,500')
+    expect(card('内訳').textContent).not.toContain('連盟対決報酬')
+    expect(card('内訳').querySelectorAll('.ledger')).toHaveLength(0)
+  })
+})
+
+describe('Silver: 紫晶石の余りの使い道', () => {
+  const priority = (): string[] =>
+    [...card('毎月の必要量').querySelectorAll('.priority-list li')].map((li) => li.textContent ?? '')
+
+  it('「紫晶石の余りは銀塊以外の交換に回せます。」の下に、優先順位が上から順に出る', () => {
+    render(<Silver />)
+    const result = card('毎月の必要量')
+    const note = within(result).getByText('紫晶石の余りは銀塊以外の交換に回せます。')
+    expect(priority()).toEqual([
+      '金塊',
+      '高級パス交換券',
+      '特級パス交換券',
+      '戦争準備パック交換券',
+      '週間配達一括交換券',
+    ])
+    // 説明文のすぐ下にある
+    expect(note.nextElementSibling?.className).toBe('priority-list')
+    // 交換の上限の説明は、余りの説明の上にある
+    expect(note.previousElementSibling?.textContent).toBe(
+      '紫晶石 5,000 個を銀塊 5,000 個と交換できます（月に 50回、250,000 まで）。',
+    )
+    // 順位があることが伝わるよう、番号つきの一覧にしている
+    expect(result.querySelector('.priority-list ol')).not.toBeNull()
+    expect(within(result).getByText('交換の優先順位（上ほど優先）')).toBeTruthy()
+  })
+
+  it('紫晶石が不足しているときは、回せる余りが無いので出さない', () => {
+    render(<Silver />)
+    typeDamage('0')
+    expect(ledger(card('毎月の必要量'), '紫晶石の不足')).toBe('34,000')
+    expect(priority()).toEqual([])
+  })
+})
+
+describe('Silver: 入手量の内訳（🔽 で開く）', () => {
+  it('最初は閉じていて、内訳は出ていない', () => {
+    render(<Silver />)
+    expect(incomeToggle().getAttribute('aria-expanded')).toBe('false')
+    expect(incomeToggle().textContent).toContain('🔽')
+    expect(screen.queryByText('連盟対決報酬')).toBeNull()
+  })
+
+  it('押すと開いて内訳が出て、もう一度押すと閉じる', () => {
+    render(<Silver />)
+    fireEvent.click(incomeToggle())
+    expect(incomeToggle().getAttribute('aria-expanded')).toBe('true')
+    expect(incomeToggle().textContent).toContain('🔼')
+    const result = card('毎月の必要量')
+    expect(ledger(result, '連盟対決報酬')).toBe('6,500 / 日')
+    expect(ledger(result, '晶石ボス')).toBe('2,500 / 日')
+    expect(ledger(result, 'ダメージ報酬')).toBe('20,500 / 週')
+    expect(ledger(result, '1週間の合計（月〜土の6日）')).toBe('74,500')
+    // 開いても、入手量の行そのものの数字は変わらない
+    expect(ledger(result, '毎月の入手量（紫晶石）')).toBe('298,000')
+
+    fireEvent.click(incomeToggle())
+    expect(incomeToggle().getAttribute('aria-expanded')).toBe('false')
+    expect(screen.queryByText('連盟対決報酬')).toBeNull()
+  })
+
+  it('ボタンは開く対象の内訳と結びついている', () => {
+    render(<Silver />)
+    const id = incomeToggle().getAttribute('aria-controls')
+    expect(id).toBe('silver-income-detail')
+    expect(document.getElementById(id as string)).not.toBeNull()
+  })
+
+  it('開いたままダメージ報酬を変えると、内訳も変わる', () => {
+    render(<Silver />)
+    fireEvent.click(incomeToggle())
+    typeDamage('30000')
+    const result = card('毎月の必要量')
+    expect(ledger(result, 'ダメージ報酬')).toBe('30,000 / 週')
+    expect(ledger(result, '1週間の合計（月〜土の6日）')).toBe('84,000')
+  })
+})
+
+describe('Silver: 前月繰越分の銀塊量', () => {
+  it('入力欄はダメージ報酬の上にあり、初期値は 0', () => {
+    render(<Silver />)
+    expect(carryInput().value).toBe('0')
+    const inputs = [...card('あなたの条件').querySelectorAll('input[type="text"]')]
+    expect(inputs.map((i) => i.id)).toEqual(['silver-carry', 'silver-damage'])
+  })
+
+  it.each<[string, string, string | null]>([
+    ['10000', '50 / 50回', '今月は 35,000 銀塊が不足します。どこかで調整して下さい。'],
+    ['44999', '50 / 50回', '今月は 1 銀塊が不足します。どこかで調整して下さい。'],
+    ['45000', '50 / 50回', null], // 必要量 − 繰越 = 250,000 ちょうどなら足りる
+    ['100000', '39 / 50回', null],
+    ['295000', '0 / 50回', null],
+  ])('繰越 %s → 交換回数 %s、不足の知らせ %o', (carry, times, alert) => {
+    render(<Silver />)
+    typeCarry(carry)
+    const result = card('毎月の必要量')
+    expect(ledger(result, '紫晶石との交換回数（月の上限 50回）')).toBe(times)
+    expect(alertText()).toBe(alert)
+    // 必要量そのものは変わらない
+    expect(result.querySelector('.total__value')?.textContent).toBe('295,000')
+  })
+
+  it('繰越分は4週間の流れの1週目から使える', () => {
+    render(<Silver />)
+    typeCarry('110000')
+    expect(weeks()).toEqual([
+      ['閃金', '110,000', '70,000', '180,000', '次週への繰越', '0'], // 110,000 + 70,000 でちょうど足りる
+      ['百発百中', '0', '75,000', '25,000', '次週への繰越', '50,000'],
+      ['戦争準備', '50,000', '40,000', '0', '次週への繰越', '90,000'],
+      ['賞金稼ぎ', '90,000', '0', '90,000', '翌月への繰越', '0'],
+    ])
+  })
+
+  describe('5,000 きざみの増減ボタン', () => {
+    const plus = (): HTMLButtonElement =>
+      screen.getByRole('button', { name: '前月繰越分の銀塊量を 5,000 増やす' }) as HTMLButtonElement
+    const minus = (): HTMLButtonElement =>
+      screen.getByRole('button', { name: '前月繰越分の銀塊量を 5,000 減らす' }) as HTMLButtonElement
+
+    it('＋ で 5,000 ずつ増え、− で 5,000 ずつ減る', () => {
+      render(<Silver />)
+      fireEvent.click(plus())
+      expect(carryInput().value).toBe('5,000')
+      fireEvent.click(plus())
+      fireEvent.click(plus())
+      expect(carryInput().value).toBe('15,000')
+      fireEvent.click(minus())
+      expect(carryInput().value).toBe('10,000')
+      // 計算にも反映される（必要 295,000 − 繰越 10,000 − 上限 250,000 = 35,000）
+      expect(alertText()).toBe('今月は 35,000 銀塊が不足します。どこかで調整して下さい。')
+    })
+
+    it('0 のときは − を押せず、0 より下がらない', () => {
+      render(<Silver />)
+      expect(minus().disabled).toBe(true)
+      typeCarry('3000')
+      expect(minus().disabled).toBe(false)
+      fireEvent.click(minus())
+      expect(carryInput().value).toBe('0') // 3,000 − 5,000 は 0 で止める
+      expect(minus().disabled).toBe(true)
+    })
+
+    it('上限を超えない', () => {
+      render(<Silver />)
+      typeCarry('9999000')
+      fireEvent.click(plus())
+      expect(carryInput().value).toBe('9,999,999')
+      expect(plus().disabled).toBe(true)
+    })
+
+    it('手で入れた 5,000 の倍数でない値からも、5,000 ずつ動く', () => {
+      render(<Silver />)
+      typeCarry('12345')
+      fireEvent.click(plus())
+      expect(carryInput().value).toBe('17,345')
+    })
+
+    it('不正な値が入っているときは、＋ で 5,000 から入れ直せる', () => {
+      render(<Silver />)
+      typeCarry('abc')
+      expect(minus().disabled).toBe(true)
+      fireEvent.click(plus())
+      expect(carryInput().value).toBe('5,000')
+      expect(carryInput().getAttribute('aria-invalid')).toBe('false')
+    })
+
+    it('ボタンで変えた値も保存される', async () => {
+      render(<Silver />)
+      fireEvent.click(plus())
+      await waitFor(() => expect(localStorage.getItem(CARRY_KEY)).toBe('5000'))
+    })
+
+    it('増減ボタンが付くのは前月繰越分だけ（ダメージ報酬には付かない）', () => {
+      render(<Silver />)
+      expect(card('あなたの条件').querySelectorAll('.field__step')).toHaveLength(2)
+    })
+  })
+
+  it('結果のカードに、入れた繰越分の行が出る', () => {
+    render(<Silver />)
+    typeCarry('100000')
+    const result = card('毎月の必要量')
+    expect(ledger(result, '前月繰越分の銀塊量')).toBe('100,000')
+    expect(ledger(result, '紫晶石の余り')).toBe('103,000') // 298,000 − 195,000
+  })
+
+  it('入力を終えると桁区切りつきに整う', () => {
+    render(<Silver />)
+    typeCarry('100000')
+    fireEvent.blur(carryInput())
+    expect(carryInput().value).toBe('100,000')
+  })
+
+  it.each(['', 'abc', '-1', '1.5', '10000000'])('不正な値 %o では計算せず、入力を促す', (bad) => {
+    render(<Silver />)
+    typeCarry(bad)
+    expect(carryInput().getAttribute('aria-invalid')).toBe('true')
+    expect(document.getElementById('silver-carry-hint')?.textContent).toBe(
+      '0〜9,999,999 の整数で入力してください',
+    )
+    expect(screen.getByText('入力欄に 0 以上の整数を入れると計算できます。')).toBeTruthy()
+    expect(screen.queryByRole('heading', { level: 2, name: '毎月の必要量' })).toBeNull()
+  })
+
+  it('保存され、再マウントで復元される。0 に戻すと保存も消える', async () => {
+    const first = render(<Silver />)
+    typeCarry('45000')
+    await waitFor(() => expect(localStorage.getItem(CARRY_KEY)).toBe('45000'))
+    first.unmount()
+
+    render(<Silver />)
+    expect(carryInput().value).toBe('45,000')
+    expect(alertText()).toBeNull()
+
+    typeCarry('0')
+    await waitFor(() => expect(localStorage.getItem(CARRY_KEY)).toBeNull())
   })
 })
 
 describe('Silver: スイッチ（お金で買える上限まで買う）', () => {
-  it('オフにすると、任意の 150,000 が必要量から外れ、貯えも要らなくなる', () => {
+  it('スイッチが出るのは、任意の交換がある閃金と賞金稼ぎ', () => {
+    render(<Silver />)
+    expect(screen.getAllByRole('switch')).toHaveLength(2)
+    expect(goldSwitch()).toBeTruthy()
+    expect(bountySwitch()).toBeTruthy()
+  })
+
+  it('閃金をオフにすると、閃金の任意 150,000 だけが必要量から外れる', () => {
     render(<Silver />)
     fireEvent.click(goldSwitch())
 
     const result = card('毎月の必要量')
-    expect(result.querySelector('.total__value')?.textContent).toBe('85,000')
-    expect(ledger(result, '余り')).toBe('213,000')
-    expect(weeks().map((w) => [w[1], w[2], w[4]])).toEqual([
-      ['閃金', '貯えは要りません', '30,000'],
-      ['百発百中', '貯えは要りません', '25,000'],
-      ['戦争準備', '貯えは要りません', '0'],
-      ['賞金稼ぎ', '貯えは要りません', '30,000'],
+    expect(result.querySelector('.total__value')?.textContent).toBe('145,000')
+    expect(ledger(result, '紫晶石の余り')).toBe('153,000')
+    expect(weeks()).toEqual([
+      ['閃金', '0', '70,000', '30,000', '次週への繰越', '40,000'],
+      ['百発百中', '40,000', '75,000', '25,000', '次週への繰越', '90,000'],
+      ['戦争準備', '90,000', '0', '0', '次週への繰越', '90,000'],
+      ['賞金稼ぎ', '90,000', '0', '90,000', '翌月への繰越', '0'],
     ])
-    const off = card('内訳').querySelector('.exchange--off')
-    expect(off?.querySelector('.exchange__tag')?.textContent).toBe('任意・入れない')
+    const off = [...card('内訳').querySelectorAll('.exchange--off')]
+    expect(off.map((li) => li.querySelector('.exchange__what')?.textContent)).toEqual([
+      '銀塊 10,000 → 100 閃金 × 15回',
+    ])
+    expect(off[0]?.querySelector('.exchange__tag')?.textContent).toBe('任意・入れない')
   })
 
-  it('スイッチが出るのは、任意の交換がある閃金だけ', () => {
+  it('賞金稼ぎをオフにすると、賞金稼ぎの任意 60,000 だけが必要量から外れる', () => {
     render(<Silver />)
-    expect(screen.getAllByRole('switch')).toHaveLength(1)
+    fireEvent.click(bountySwitch())
+
+    const result = card('毎月の必要量')
+    expect(result.querySelector('.total__value')?.textContent).toBe('235,000')
+    expect(ledger(result, '紫晶石の余り')).toBe('63,000')
+    expect(weeks()).toEqual([
+      ['閃金', '0', '70,000', '180,000', '銀塊の不足分', '110,000'],
+      ['百発百中', '0', '75,000', '25,000', '次週への繰越', '50,000'],
+      ['戦争準備', '50,000', '75,000', '0', '次週への繰越', '125,000'],
+      ['賞金稼ぎ', '125,000', '15,000', '30,000', '翌月への繰越', '110,000'],
+    ])
+    const off = [...card('内訳').querySelectorAll('.exchange--off')]
+    expect(off.map((li) => li.querySelector('.exchange__what')?.textContent)).toEqual([
+      '銀塊 10,000 → 100 賞金稼ぎ用弾丸 × 6回',
+    ])
+  })
+
+  it('両方オフにすると必ずの 85,000 だけになり、貯えも要らなくなる', () => {
+    render(<Silver />)
+    fireEvent.click(goldSwitch())
+    fireEvent.click(bountySwitch())
+
+    const result = card('毎月の必要量')
+    expect(result.querySelector('.total__value')?.textContent).toBe('85,000')
+    expect(ledger(result, '紫晶石の余り')).toBe('213,000')
+    expect(ledger(result, '紫晶石との交換回数（月の上限 50回）')).toBe('17 / 50回')
+    // どの週も足りる（不足の行にならない）
+    expect(weeks().map((w) => [w[4], w[5]])).toEqual([
+      ['次週への繰越', '40,000'],
+      ['次週への繰越', '30,000'],
+      ['次週への繰越', '30,000'],
+      ['翌月への繰越', '0'],
+    ])
+  })
+
+  it('説明文の途中に余計な空白が入らない', () => {
+    render(<Silver />)
+    expect(goldSwitch().closest('label')?.querySelector('.switch__desc')?.textContent).toBe(
+      'オンにすると、お金と同じレートの交換（銀塊 150,000）も必要量に入れます。' +
+        '上限まで買わないなら、必要なときにお金で買えばよいのでオフにします。',
+    )
+  })
+
+  it('スイッチの説明に、そのイベントの任意の交換ぶんの銀塊が出る', () => {
+    render(<Silver />)
+    expect(goldSwitch().closest('label')?.textContent).toContain('銀塊 150,000')
+    expect(bountySwitch().closest('label')?.textContent).toContain('銀塊 60,000')
   })
 })
 
@@ -133,8 +502,7 @@ describe('Silver: ダメージ報酬', () => {
     typeDamage('30000')
     const result = card('毎月の必要量')
     expect(ledger(result, '毎月の入手量（紫晶石）')).toBe('336,000') // (54,000 + 30,000) × 4
-    expect(ledger(result, '余り')).toBe('101,000')
-    expect(ledger(card('内訳'), '1週間の合計')).toBe('84,000')
+    expect(ledger(result, '紫晶石の余り')).toBe('86,000') // 336,000 − 250,000（交換は上限まで）
   })
 
   it('入力を終えると桁区切りつきに整う', () => {
@@ -144,23 +512,32 @@ describe('Silver: ダメージ報酬', () => {
     expect(damageInput().value).toBe('30,000')
   })
 
-  it('入手が足りないときは不足を出し、週ごとの貯えは出さない', () => {
+  it('紫晶石の入手が足りないときは紫晶石の不足を出し、4週間の流れは交換できたぶんで計算する', () => {
     render(<Silver />)
     typeDamage('0')
     const result = card('毎月の必要量')
     expect(ledger(result, '毎月の入手量（紫晶石）')).toBe('216,000')
-    expect(ledger(result, '不足')).toBe('19,000')
+    expect(ledger(result, '紫晶石の不足')).toBe('34,000') // 交換に使う 250,000 − 216,000
     expect(within(result).getByText(/毎月の入手では足りません/)).toBeTruthy()
-    expect(card('4週間の流れ').querySelectorAll('.week')).toHaveLength(0)
-    expect(within(card('4週間の流れ')).getByText(/週ごとの貯えは計算できません/)).toBeTruthy()
+    // 銀塊の不足（上限超え）は入手とは別なので、こちらも出たまま
+    expect(alertText()).toBe('今月は 45,000 銀塊が不足します。どこかで調整して下さい。')
+    // 4週間の流れは、手持ちの紫晶石で交換できたぶんだけを入手量として出す（週 54,000）
+    expect(weeks()).toEqual([
+      ['閃金', '0', '50,000', '180,000', '銀塊の不足分', '130,000'],
+      ['百発百中', '0', '55,000', '25,000', '次週への繰越', '30,000'],
+      ['戦争準備', '30,000', '55,000', '0', '次週への繰越', '85,000'],
+      ['賞金稼ぎ', '85,000', '55,000', '90,000', '翌月への繰越', '50,000'],
+    ])
   })
 
   it('足りなくても、スイッチをオフにすれば足りる', () => {
     render(<Silver />)
     typeDamage('0')
+    fireEvent.click(bountySwitch())
+    expect(ledger(card('毎月の必要量'), '紫晶石の不足')).toBe('19,000') // 235,000 − 216,000。まだ足りない
     fireEvent.click(goldSwitch())
-    expect(ledger(card('毎月の必要量'), '余り')).toBe('131,000') // 216,000 − 85,000
-    expect(weeks()).toHaveLength(4)
+    expect(ledger(card('毎月の必要量'), '紫晶石の余り')).toBe('131,000') // 216,000 − 85,000
+    expect(weeks().some((w) => w[4] === '銀塊の不足分')).toBe(false)
   })
 
   it.each(['', 'abc', '-1', '100.5', '10000000'])('不正な値 %o では計算せず、入力を促す', (bad) => {
@@ -170,10 +547,10 @@ describe('Silver: ダメージ報酬', () => {
     expect(document.getElementById('silver-damage-hint')?.textContent).toBe(
       '0〜9,999,999 の整数で入力してください',
     )
-    expect(screen.getByText('ダメージ報酬を入力すると計算できます。')).toBeTruthy()
+    expect(screen.getByText('入力欄に 0 以上の整数を入れると計算できます。')).toBeTruthy()
     expect(screen.queryByRole('heading', { level: 2, name: '毎月の必要量' })).toBeNull()
     // 内訳（固定の値）は出したままにする
-    expect(ledger(card('内訳'), 'ダメージ報酬')).toBe('—')
+    expect(card('内訳').querySelectorAll('.exchange')).toHaveLength(5)
   })
 
   it('説明文は入力欄に紐づいていて、変化が読み上げられる', () => {
@@ -197,12 +574,26 @@ describe('Silver: 保存と復元', () => {
     fireEvent.click(goldSwitch())
     await waitFor(() => expect(localStorage.getItem(DAMAGE_KEY)).toBe('30000'))
     expect(localStorage.getItem(BUYALL_KEY)).toBe('0')
+    expect(localStorage.getItem(BUYALL_BOUNTY_KEY)).toBeNull() // オンのままのほうは保存しない
     first.unmount()
 
     render(<Silver />)
     expect(damageInput().value).toBe('30,000')
     expect(goldSwitch().checked).toBe(false)
-    expect(card('毎月の必要量').querySelector('.total__value')?.textContent).toBe('85,000')
+    expect(bountySwitch().checked).toBe(true)
+    expect(card('毎月の必要量').querySelector('.total__value')?.textContent).toBe('145,000')
+  })
+
+  it('スイッチはイベントごとに別々に保存される', async () => {
+    const first = render(<Silver />)
+    fireEvent.click(bountySwitch())
+    await waitFor(() => expect(localStorage.getItem(BUYALL_BOUNTY_KEY)).toBe('0'))
+    expect(localStorage.getItem(BUYALL_KEY)).toBeNull()
+    first.unmount()
+
+    render(<Silver />)
+    expect(goldSwitch().checked).toBe(true)
+    expect(bountySwitch().checked).toBe(false)
   })
 
   it('初期値に戻すと保存も消える', async () => {
