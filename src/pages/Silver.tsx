@@ -17,6 +17,7 @@ import {
   parseCarry,
   parseDamage,
   planSilver,
+  snapCarry,
   weeklyBaseIncome,
 } from '../silver'
 import type { SilverEvent, SilverPlan, WeekPlan } from '../silver'
@@ -38,25 +39,33 @@ const INCOME_DETAIL_ID = 'silver-income-detail'
 /** 任意の交換があるイベント（スイッチを出す対象） */
 const OPTIONAL_EVENTS = SILVER_EVENTS.filter((e) => optionalTotal(e) > 0)
 
-const loadDamageRaw = (): string => fmt(parseDamage(load(DAMAGE_KEY) ?? '').value ?? DEFAULT_DAMAGE)
-const loadCarryRaw = (): string => fmt(parseCarry(load(CARRY_KEY) ?? '').value ?? DEFAULT_CARRY)
+/**
+ * ダメージ報酬の欄の初期表示。保存されていない・不正な値なら初期値。
+ * parseDamage は空欄を 0 として扱うので、「保存されていない」は先に分けて初期値にする。
+ */
+const loadDamageRaw = (): string => {
+  const stored = load(DAMAGE_KEY)
+  if (stored === null || stored.trim() === '') return fmt(DEFAULT_DAMAGE)
+  return fmt(parseDamage(stored).value ?? DEFAULT_DAMAGE)
+}
+/** 保存された前月繰越分。保存されていない・不正な値なら初期値。5,000 の倍数にそろえる */
+const loadCarry = (): number => snapCarry(parseCarry(load(CARRY_KEY) ?? '').value ?? DEFAULT_CARRY)
 const loadBuyAll = (): Record<string, boolean> =>
   Object.fromEntries(OPTIONAL_EVENTS.map((e) => [e.key, load(buyAllKey(e.key)) !== '0']))
 
 /** 銀塊必要量チェッカーのページ（SPEC §14） */
 export default function Silver() {
-  // 入力途中（空欄など）も保持したいので文字列で持つ
-  const [carryRaw, setCarryRaw] = useState<string>(loadCarryRaw)
+  // 前月繰越分は「＋」「−」でしか変えないので、数値のまま持つ（不正な値にならない）
+  const [carry, setCarry] = useState<number>(loadCarry)
+  // ダメージ報酬は入力途中（空欄など）も保持したいので文字列で持つ
   const [damageRaw, setDamageRaw] = useState<string>(loadDamageRaw)
   const [buyAll, setBuyAll] = useState<Record<string, boolean>>(loadBuyAll)
 
-  const carry = parseCarry(carryRaw).value
   const damage = parseDamage(damageRaw).value
 
   // 保存するのは「初期値から変えた、有効な値」だけ（初期値を保存すると、初期値を変えても古い値が残る）。
   // 入力途中の不正な値では触らず、最後に有効だった値を残す
   useEffect(() => {
-    if (carry === null) return
     save(CARRY_KEY, carry === DEFAULT_CARRY ? null : String(carry))
   }, [carry])
   useEffect(() => {
@@ -67,7 +76,7 @@ export default function Silver() {
     for (const e of OPTIONAL_EVENTS) save(buyAllKey(e.key), buyAll[e.key] === false ? '0' : null)
   }, [buyAll])
 
-  const plan = damage === null || carry === null ? null : planSilver(damage, buyAll, carry)
+  const plan = damage === null ? null : planSilver(damage, buyAll, carry)
 
   return (
     <div className="cafe">
@@ -81,19 +90,7 @@ export default function Silver() {
           あなたの条件
         </h2>
 
-        <NumberField
-          id="silver-carry"
-          hintId={CARRY_HINT_ID}
-          label="前月繰越分の銀塊量"
-          raw={carryRaw}
-          value={carry}
-          onChange={setCarryRaw}
-          hint="先月から持ち越した銀塊の数です。無ければ 0 のままにします。"
-          error={`0〜${fmt(MAX_CARRY)} の整数で入力してください`}
-          // 銀塊は 5,000 個単位で交換するので、同じきざみで増減できるようにする
-          step={EXCHANGE_UNIT}
-          max={MAX_CARRY}
-        />
+        <CarryStepper carry={carry} onChange={setCarry} />
         <NumberField
           id="silver-damage"
           hintId={DAMAGE_HINT_ID}
@@ -127,7 +124,7 @@ export default function Silver() {
       </section>
 
       {plan === null ? (
-        <p className="cafe__notice">入力欄に 0 以上の整数を入れると計算できます。</p>
+        <p className="cafe__notice">ダメージ報酬に 0 以上の整数を入れると計算できます。</p>
       ) : (
         <>
           <Result plan={plan} damage={damage ?? 0} />
@@ -141,9 +138,50 @@ export default function Silver() {
 }
 
 /**
+ * 前月繰越分の銀塊量。直接は入力させず、「−」「＋」で 5,000 ずつ変える（SPEC §14.5）。
+ * 銀塊は 5,000 個単位で交換するので、繰越分も同じきざみにそろえておくと計算が半端にならない。
+ */
+function CarryStepper({ carry, onChange }: { carry: number; onChange: (carry: number) => void }) {
+  const label = '前月繰越分の銀塊量'
+  return (
+    <div className="field">
+      <label className="field__label" htmlFor="silver-carry">
+        {label}
+      </label>
+      <div className="field__stepper">
+        <button
+          type="button"
+          className="field__step"
+          onClick={() => onChange(snapCarry(carry - EXCHANGE_UNIT))}
+          disabled={carry <= 0}
+          aria-label={`${label}を ${fmt(EXCHANGE_UNIT)} 減らす`}
+        >
+          −
+        </button>
+        {/* 入力欄ではなく表示だけ。値が変わったら読み上げられるよう output にしている */}
+        <output id="silver-carry" className="field__value" aria-describedby={CARRY_HINT_ID}>
+          {fmt(carry)}
+        </output>
+        <button
+          type="button"
+          className="field__step"
+          onClick={() => onChange(snapCarry(carry + EXCHANGE_UNIT))}
+          disabled={carry >= MAX_CARRY}
+          aria-label={`${label}を ${fmt(EXCHANGE_UNIT)} 増やす`}
+        >
+          ＋
+        </button>
+      </div>
+      <p className="field__hint" id={CARRY_HINT_ID}>
+        {`先月から持ち越した銀塊の数です。＋ − で ${fmt(EXCHANGE_UNIT)} ずつ変えられます。`}
+      </p>
+    </div>
+  )
+}
+
+/**
  * 0 以上の整数を入れる欄。value が null なら入力ミスとして赤くし、説明文の代わりに error を出す。
  * 桁の打ち間違いに気づけるよう、入力を終えたら桁区切りつきに整える（入力中に整えるとカーソルが飛ぶ）。
- * step を渡すと、欄の左右に「−」「＋」のボタンを出し、そのきざみで増減できる（0〜max の範囲）。
  */
 function NumberField({
   id,
@@ -154,8 +192,6 @@ function NumberField({
   onChange,
   hint,
   error,
-  step,
-  max,
 }: {
   id: string
   hintId: string
@@ -165,57 +201,24 @@ function NumberField({
   onChange: (raw: string) => void
   hint: string
   error: string
-  step?: number
-  max?: number
 }) {
   const invalid = value === null
-  const limit = max ?? Number.MAX_SAFE_INTEGER
-  // 不正な値が入っているときは 0 から数える（「＋」を押せば有効な値に戻れる）
-  const base = value ?? 0
-  const stepBy = (delta: number): void => onChange(fmt(Math.min(limit, Math.max(0, base + delta))))
-  const input = (
-    <input
-      id={id}
-      className={'field__input' + (invalid ? ' field__input--invalid' : '')}
-      type="text"
-      inputMode="numeric"
-      value={raw}
-      aria-invalid={invalid}
-      aria-describedby={hintId}
-      onChange={(e) => onChange(e.target.value)}
-      onBlur={() => value !== null && onChange(fmt(value))}
-    />
-  )
   return (
     <div className="field">
       <label className="field__label" htmlFor={id}>
         {label}
       </label>
-      {step === undefined ? (
-        input
-      ) : (
-        <div className="field__stepper">
-          <button
-            type="button"
-            className="field__step"
-            onClick={() => stepBy(-step)}
-            disabled={base <= 0}
-            aria-label={`${label}を ${fmt(step)} 減らす`}
-          >
-            −
-          </button>
-          {input}
-          <button
-            type="button"
-            className="field__step"
-            onClick={() => stepBy(step)}
-            disabled={base >= limit}
-            aria-label={`${label}を ${fmt(step)} 増やす`}
-          >
-            ＋
-          </button>
-        </div>
-      )}
+      <input
+        id={id}
+        className={'field__input' + (invalid ? ' field__input--invalid' : '')}
+        type="text"
+        inputMode="numeric"
+        value={raw}
+        aria-invalid={invalid}
+        aria-describedby={hintId}
+        onChange={(e) => onChange(e.target.value)}
+        onBlur={() => value !== null && onChange(fmt(value))}
+      />
       <p className={'field__hint' + (invalid ? ' field__hint--invalid' : '')} id={hintId} aria-live="polite">
         {invalid ? error : hint}
       </p>
@@ -226,7 +229,6 @@ function NumberField({
 /** 月の必要量と、前月繰越分・入手量・交換回数 */
 function Result({ plan, damage }: { plan: SilverPlan; damage: number }) {
   const [incomeOpen, setIncomeOpen] = useState(false)
-  const short = plan.balance < 0
   return (
     <section className="cafe__card" aria-labelledby="silver-result">
       <h2 className="cafe__heading" id="silver-result">
@@ -236,7 +238,7 @@ function Result({ plan, damage }: { plan: SilverPlan; damage: number }) {
         <span className="total__unit">銀塊</span>
         <span className="total__value">{fmt(plan.monthlyNeed)}</span>
       </p>
-      {/* 前月繰越分を引いても、月に交換できる量（250,000）を超えるとき */}
+      {/* 交換できるだけ交換しても足りないとき（月の上限か、紫晶石の不足による） */}
       {plan.silverShortage > 0 && (
         <p className="total__alert" role="alert">
           今月は {fmt(plan.silverShortage)} 銀塊が不足します。どこかで調整して下さい。
@@ -285,9 +287,9 @@ function Result({ plan, damage }: { plan: SilverPlan; damage: number }) {
             </dl>
           )}
         </div>
-        <div className={short ? 'ledger__short' : 'ledger__ok'}>
-          <dt>{short ? '紫晶石の不足' : '紫晶石の余り'}</dt>
-          <dd>{fmt(Math.abs(plan.balance))}</dd>
+        <div className="ledger__ok">
+          <dt>紫晶石の余り</dt>
+          <dd>{fmt(plan.balance)}</dd>
         </div>
         <div>
           <dt>紫晶石との交換回数（月の上限 {EXCHANGE_LIMIT}回）</dt>
@@ -300,24 +302,23 @@ function Result({ plan, damage }: { plan: SilverPlan; damage: number }) {
         {`紫晶石 ${fmt(EXCHANGE_UNIT)} 個を銀塊 ${fmt(EXCHANGE_UNIT)} 個と交換できます` +
           `（月に ${EXCHANGE_LIMIT}回、${fmt(MONTHLY_CAP)} まで）。`}
       </p>
-      <p className="cafe__note">
-        {short
-          ? '毎月の入手では足りません。ダメージ報酬を増やすか、スイッチをオフにしてお金と同じレートの交換を減らす必要があります。'
-          : '紫晶石の余りは銀塊以外の交換に回せます。'}
-      </p>
-      {/* 余りの使い道。余りが無い（不足している）ときは回せないので出さない */}
-      {!short && (
-        <div className="priority-list">
-          <p className="priority-list__title" id="silver-priority">
-            交換の優先順位（上ほど優先）
-          </p>
-          <ol aria-labelledby="silver-priority">
-            {SURPLUS_PRIORITY.map((name) => (
-              <li key={name}>{name}</li>
-            ))}
-          </ol>
-        </div>
+      {/* 上限まで交換したいのに、紫晶石が足りずに届いていないとき */}
+      {plan.amethystLimited && (
+        <p className="cafe__note cafe__note--warn">
+          {`紫晶石が足りないので、交換できるのは ${fmt(plan.exchanges)}回（${fmt(plan.exchangeAmount)}）までです。`}
+        </p>
       )}
+      <p className="cafe__note">紫晶石の余りは銀塊以外の交換に回せます。</p>
+      <div className="priority-list">
+        <p className="priority-list__title" id="silver-priority">
+          交換の優先順位（上ほど優先）
+        </p>
+        <ol aria-labelledby="silver-priority">
+          {SURPLUS_PRIORITY.map((name) => (
+            <li key={name}>{name}</li>
+          ))}
+        </ol>
+      </div>
     </section>
   )
 }

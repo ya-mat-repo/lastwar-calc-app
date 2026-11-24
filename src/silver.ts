@@ -76,9 +76,9 @@ export const INCOME_DAYS = 6
 export const DEFAULT_DAMAGE = 20_500
 /** ダメージ報酬の上限（桁の打ち間違いを弾くためのもの） */
 export const MAX_DAMAGE = 9_999_999
-/** 前月繰越分の銀塊の初期値と上限 */
+/** 前月繰越分の銀塊の初期値と上限。画面では EXCHANGE_UNIT（5,000）きざみでしか変えられない */
 export const DEFAULT_CARRY = 0
-export const MAX_CARRY = 9_999_999
+export const MAX_CARRY = 9_995_000
 
 /** 紫晶石 → 銀塊の交換は、銀塊 5,000 個を1単位として行う（紫晶石 1 個 = 銀塊 1 個） */
 export const EXCHANGE_UNIT = 5_000
@@ -126,12 +126,20 @@ export const optionalTotal = (event: SilverEvent): number => sumKind(event, 'opt
  * 受け付けるのは 0〜MAX_DAMAGE の整数だけで、それ以外は入力ミス（value: null）として返す。
  */
 export function parseDamage(raw: string): { value: number | null; invalid: boolean } {
+  // 欄を空にしたときは 0 として扱う（打ち直しの途中で結果が消えないように。SPEC §14.5）
+  if (raw.trim() === '') return { value: 0, invalid: false }
   return parseIntInRange(raw, 0, MAX_DAMAGE)
 }
 
-/** 前月繰越分の銀塊の入力を解釈する。受け付けるのは 0〜MAX_CARRY の整数だけ */
+/** 保存されていた前月繰越分を解釈する。受け付けるのは 0〜MAX_CARRY の整数だけ */
 export function parseCarry(raw: string): { value: number | null; invalid: boolean } {
   return parseIntInRange(raw, 0, MAX_CARRY)
+}
+
+/** 前月繰越分を 0〜MAX_CARRY の範囲に収め、EXCHANGE_UNIT の倍数に切り下げる */
+export function snapCarry(carry: number): number {
+  const clamped = Math.min(MAX_CARRY, Math.max(0, carry))
+  return Math.floor(clamped / EXCHANGE_UNIT) * EXCHANGE_UNIT
 }
 
 /** 4週間の流れの1週ぶん。数字はすべて銀塊 */
@@ -165,18 +173,22 @@ export interface SilverPlan {
   /** 前月繰越分の銀塊 */
   readonly carry: number
   /**
-   * 今月、紫晶石と交換する回数。
-   * 必要量から前月繰越分を引いたぶんを交換するが、月の上限（EXCHANGE_LIMIT）までしか交換できない。
+   * 今月、紫晶石と**実際に交換できる**回数。次の3つのうち、いちばん少ないもの:
+   * 必要量から前月繰越分を引いたぶん / 月の上限（EXCHANGE_LIMIT）/ 手持ちの紫晶石で交換できるぶん。
+   * 4週間の流れの交換回数の合計と一致する。
    */
   readonly exchanges: number
   /** 交換に使う紫晶石（＝交換で手に入る銀塊）。exchanges × EXCHANGE_UNIT */
   readonly exchangeAmount: number
+  /** 紫晶石が足りないせいで、交換したい回数（上限まで）に届いていない */
+  readonly amethystLimited: boolean
   /**
-   * 今月不足する銀塊。上限いっぱいまで交換しても足りない量
-   * （必要量 − 前月繰越分 − 月の上限。足りていれば 0）。
+   * 今月不足する銀塊。交換できるだけ交換しても足りない量
+   * （必要量 − 前月繰越分 − 交換で手に入る銀塊。足りていれば 0）。
+   * 月の上限で足りないぶんと、紫晶石が足りないぶんの両方を含む。
    */
   readonly silverShortage: number
-  /** 入手量 − 交換に使う紫晶石。0 以上なら紫晶石の余り、負なら紫晶石の不足 */
+  /** 入手量 − 交換に使う紫晶石。交換に使わずに残る紫晶石（0 以上） */
   readonly balance: number
   /** 4週間の流れ（SPEC §14.6）。銀塊の入手・不足・繰越を週ごとに追ったもの */
   readonly weeks: readonly WeekPlan[]
@@ -240,17 +252,20 @@ export function planSilver(
 
   // 前月繰越分があれば、そのぶんは交換しなくてよい
   const toExchange = Math.max(0, monthlyNeed - carry)
-  const exchanges = Math.min(EXCHANGE_LIMIT, exchangesNeeded(toExchange))
-  const exchangeAmount = exchanges * EXCHANGE_UNIT
+  // 交換したい量（月の上限まで）。実際に交換できるのは、このうち手持ちの紫晶石で足りるぶん
+  const wanted = Math.min(EXCHANGE_LIMIT, exchangesNeeded(toExchange)) * EXCHANGE_UNIT
+  const weeks = simulateWeeks(rows, weeklyIncome, carry, wanted)
+  const exchangeAmount = weeks.reduce((sum, w) => sum + w.gain, 0)
   return {
     weeklyIncome,
     monthlyIncome,
     monthlyNeed,
     carry,
-    exchanges,
+    exchanges: exchangeAmount / EXCHANGE_UNIT,
     exchangeAmount,
-    silverShortage: Math.max(0, toExchange - MONTHLY_CAP),
+    amethystLimited: exchangeAmount < wanted,
+    silverShortage: Math.max(0, toExchange - exchangeAmount),
     balance: monthlyIncome - exchangeAmount,
-    weeks: simulateWeeks(rows, weeklyIncome, carry, exchangeAmount),
+    weeks,
   }
 }

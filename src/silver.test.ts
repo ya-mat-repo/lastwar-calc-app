@@ -4,6 +4,7 @@ import {
   DEFAULT_DAMAGE,
   EXCHANGE_LIMIT,
   EXCHANGE_UNIT,
+  MAX_CARRY,
   MAX_DAMAGE,
   MONTHLY_CAP,
   SILVER_EVENTS,
@@ -15,6 +16,7 @@ import {
   parseCarry,
   parseDamage,
   planSilver,
+  snapCarry,
   weeklyBaseIncome,
 } from './silver'
 
@@ -156,8 +158,10 @@ describe('parseDamage', () => {
     ['２0500', 20500, false], // 全角まじりでも桁を落とさない（以前は 500 になっていた）
     ['２０，５００', 20500, false],
     [String(MAX_DAMAGE), MAX_DAMAGE, false],
-    ['', null, true],
-    ['abc', null, true],
+    ['', 0, false], // 欄を空にしたときは 0 として扱う
+    ['   ', 0, false],
+    ['abc', null, true], // 空欄以外の不正な値は、これまでどおり入力ミス
+    ['-', null, true],
     ['-1', null, true],
     ['100.5', null, true],
     [String(MAX_DAMAGE + 1), null, true],
@@ -199,10 +203,60 @@ describe('planSilver: 月の集計', () => {
     expect([p.weeks[0]?.optionalUse, p.weeks[3]?.optionalUse]).toEqual([150_000, 60_000])
   })
 
-  it('紫晶石の不足: 交換に使う量（上限まで）に入手が届かないと balance が負になる', () => {
-    const p = planSilver(0) // 入手 216,000。交換は上限の 250,000
-    expect([p.exchanges, p.exchangeAmount, p.balance]).toEqual([50, 250_000, -34_000])
-    expect(p.silverShortage).toBe(45_000)
+})
+
+describe('planSilver: 紫晶石が足りないとき（実際に交換できる量で計算する）', () => {
+  it('交換回数は、手持ちの紫晶石で交換できるぶんまで', () => {
+    const p = planSilver(0) // 入手 216,000。交換したいのは上限の 250,000（50回）
+    expect([p.exchanges, p.exchangeAmount]).toEqual([43, 215_000])
+    expect(p.amethystLimited).toBe(true)
+    // 4週間の流れの交換回数の合計と一致する
+    expect(p.weeks.reduce((s, w) => s + w.gainTimes, 0)).toBe(p.exchanges)
+  })
+
+  it('銀塊の不足は、上限で足りないぶんと紫晶石で足りないぶんを合わせた量', () => {
+    const p = planSilver(0)
+    expect(p.silverShortage).toBe(80_000) // 295,000 − 215,000（上限ぶん 45,000 ＋ 紫晶石ぶん 35,000）
+  })
+
+  it('上限には収まっていても、紫晶石が足りなければ銀塊は不足する', () => {
+    // 必要 235,000（47回）は上限以内だが、紫晶石 216,000 では 43回（215,000）しか交換できない
+    const p = planSilver(0, { bounty: false })
+    expect([p.monthlyNeed, p.exchanges, p.exchangeAmount]).toEqual([235_000, 43, 215_000])
+    expect(p.silverShortage).toBe(20_000)
+    expect(p.amethystLimited).toBe(true)
+  })
+
+  it('紫晶石の余りは負にならない（交換できたぶんしか使わない）', () => {
+    for (const damage of [0, 1_000, 10_000, 19_750, 20_500]) {
+      for (const gold of [true, false]) {
+        for (const bounty of [true, false]) {
+          const p = planSilver(damage, { gold, bounty })
+          expect(p.balance).toBeGreaterThanOrEqual(0)
+          expect(p.balance).toBe(p.monthlyIncome - p.exchangeAmount)
+        }
+      }
+    }
+    expect(planSilver(0).balance).toBe(1_000) // 216,000 − 215,000。5,000 に満たない端数
+  })
+
+  it('紫晶石が足りていれば、交換したい量をそのまま交換できる', () => {
+    const p = planSilver(DEFAULT_DAMAGE)
+    expect([p.exchanges, p.amethystLimited, p.silverShortage]).toEqual([50, false, 45_000])
+    const q = planSilver(0, { gold: false, bounty: false }) // 必要 85,000 なら紫晶石 216,000 で足りる
+    expect([q.exchanges, q.amethystLimited, q.silverShortage]).toEqual([17, false, 0])
+  })
+
+  it('どの条件でも、銀塊の不足 ＝ 必要量 − 繰越 − 交換で手に入る銀塊（負にはならない）', () => {
+    for (const damage of [0, 10_000, 20_500]) {
+      for (const carry of [0, 45_000, 110_000, 295_000]) {
+        for (const gold of [true, false]) {
+          const p = planSilver(damage, { gold }, carry)
+          expect(p.silverShortage).toBe(Math.max(0, p.monthlyNeed - carry - p.exchangeAmount))
+          expect(p.exchanges).toBeLessThanOrEqual(EXCHANGE_LIMIT)
+        }
+      }
+    }
   })
 })
 
@@ -425,7 +479,7 @@ describe('前月繰越分（SPEC §14.6）', () => {
     expect(planSilver(DEFAULT_DAMAGE, {}, 100_000).monthlyNeed).toBe(295_000)
   })
 
-  it('不足のメッセージの条件は「必要量 − 繰越 > 250,000」', () => {
+  it('紫晶石が足りているときの不足の条件は「必要量 − 繰越 > 250,000」', () => {
     for (const carry of [0, 44_999, 45_000, 45_001]) {
       const p = planSilver(DEFAULT_DAMAGE, {}, carry)
       expect(p.silverShortage > 0).toBe(p.monthlyNeed - carry > MONTHLY_CAP)
@@ -435,6 +489,24 @@ describe('前月繰越分（SPEC §14.6）', () => {
 
   it('指定しなければ繰越は 0', () => {
     expect(planSilver(DEFAULT_DAMAGE).carry).toBe(0)
+  })
+})
+
+describe('snapCarry（前月繰越分を 5,000 きざみ・0〜上限にそろえる）', () => {
+  it.each<[number, number]>([
+    [0, 0],
+    [5_000, 5_000],
+    [12_345, 10_000], // 5,000 の倍数に切り下げる
+    [4_999, 0],
+    [-5_000, 0], // 0 より下がらない
+    [MAX_CARRY, MAX_CARRY],
+    [MAX_CARRY + 5_000, MAX_CARRY], // 上限を超えない
+  ])('%i → %i', (input, expected) => {
+    expect(snapCarry(input)).toBe(expected)
+  })
+
+  it('上限は 5,000 の倍数', () => {
+    expect(MAX_CARRY % EXCHANGE_UNIT).toBe(0)
   })
 })
 
